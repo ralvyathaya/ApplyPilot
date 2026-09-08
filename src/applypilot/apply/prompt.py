@@ -507,6 +507,12 @@ def build_prompt(job: dict, tailored_resume: str,
     last_name = full_name.split()[-1] if " " in full_name else ""
     display_name = f"{preferred_name} {last_name}".strip()
 
+    # Guard against literal 'None'/'null' strings leaking from the DB:
+    # a truthy 'None' string would be navigated to as if it were a URL.
+    app_url = job.get("application_url")
+    if not app_url or str(app_url).strip().lower() in ("none", "null"):
+        app_url = job["url"]
+
     # Dry-run: override submit instruction
     if dry_run:
         submit_instruction = "IMPORTANT: Do NOT click the final Submit/Apply button. Review the form, verify all fields, then output RESULT:APPLIED with a note that this was a dry run."
@@ -516,7 +522,7 @@ def build_prompt(job: dict, tailored_resume: str,
     prompt = f"""You are an autonomous job application agent. Your ONE mission: get this candidate an interview. You have all the information and tools. Think strategically. Act decisively. Submit the application.
 
 == JOB ==
-URL: {job.get('application_url') or job['url']}
+URL: {app_url}
 Title: {job['title']}
 Company: {job.get('company') or job.get('site', 'Unknown')}
 Fit Score: {job.get('fit_score', 'N/A')}/10

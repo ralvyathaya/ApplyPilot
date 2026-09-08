@@ -54,6 +54,21 @@ def _load_base_urls() -> dict[str, str | None]:
     return load_base_urls()
 
 
+def _clean_url(value) -> str | None:
+    """Normalize a scraped apply URL before it reaches the DB.
+
+    LLM extraction can return the literal string 'None'/'null' instead of
+    JSON null, and a truthy 'None' string would later be navigated to as
+    if it were a real URL.
+    """
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value or value.lower() in ("none", "null"):
+        return None
+    return value
+
+
 def resolve_url(raw_url: str, site: str) -> str | None:
     """Resolve a stored URL to an absolute URL."""
     if not raw_url:
@@ -472,7 +487,7 @@ def extract_with_llm(page, url: str) -> dict:
         from applypilot.discovery.smartextract import extract_json
         result = extract_json(raw)
         desc = result.get("full_description")
-        apply_url = result.get("application_url")
+        apply_url = _clean_url(result.get("application_url"))
 
         if desc:
             desc = clean_description(desc)
@@ -666,7 +681,7 @@ def scrape_site_batch(
                     conn.execute(
                         "UPDATE jobs SET full_description = ?, application_url = ?, "
                         "detail_scraped_at = ?, detail_error = NULL WHERE url = ?",
-                        (result.get("full_description"), result.get("application_url"), now, url),
+                        (result.get("full_description"), _clean_url(result.get("application_url")), now, url),
                     )
                 else:
                     stats["error"] += 1

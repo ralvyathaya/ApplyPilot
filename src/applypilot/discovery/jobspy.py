@@ -117,6 +117,21 @@ def _location_ok(location: str | None, accept: list[str], reject: list[str]) -> 
 
 # -- DB storage (JobSpy DataFrame -> SQLite) ---------------------------------
 
+def _clean_str(value, default=None):
+    """Normalize a DataFrame cell to a clean string or the default.
+
+    JobSpy cells can hold None, NaN, or the literal strings 'nan'/'None';
+    plain str() conversions would store those in the DB as real values
+    (e.g. application_url = 'None').
+    """
+    if value is None:
+        return default
+    s = str(value).strip()
+    if not s or s.lower() in ("nan", "none", "null", "nat"):
+        return default
+    return s
+
+
 def store_jobspy_results(conn: sqlite3.Connection, df, source_label: str) -> tuple[int, int]:
     """Store JobSpy DataFrame results into the DB. Returns (new, existing)."""
     now = datetime.now(timezone.utc).isoformat()
@@ -124,20 +139,20 @@ def store_jobspy_results(conn: sqlite3.Connection, df, source_label: str) -> tup
     existing = 0
 
     for _, row in df.iterrows():
-        url = str(row.get("job_url", ""))
-        if not url or url == "nan":
+        url = _clean_str(row.get("job_url"), "")
+        if not url:
             continue
 
-        title = str(row.get("title", "")) if str(row.get("title", "")) != "nan" else None
-        company = str(row.get("company", "")) if str(row.get("company", "")) != "nan" else None
-        location_str = str(row.get("location", "")) if str(row.get("location", "")) != "nan" else None
+        title = _clean_str(row.get("title"))
+        company = _clean_str(row.get("company"))
+        location_str = _clean_str(row.get("location"))
 
         # Build salary string from min/max
         salary = None
         min_amt = row.get("min_amount")
         max_amt = row.get("max_amount")
-        interval = str(row.get("interval", "")) if str(row.get("interval", "")) != "nan" else ""
-        currency = str(row.get("currency", "")) if str(row.get("currency", "")) != "nan" else ""
+        interval = _clean_str(row.get("interval"), "")
+        currency = _clean_str(row.get("currency"), "")
         if min_amt and str(min_amt) != "nan":
             if max_amt and str(max_amt) != "nan":
                 salary = f"{currency}{int(float(min_amt)):,}-{currency}{int(float(max_amt)):,}"
@@ -146,8 +161,8 @@ def store_jobspy_results(conn: sqlite3.Connection, df, source_label: str) -> tup
             if interval:
                 salary += f"/{interval}"
 
-        description = str(row.get("description", "")) if str(row.get("description", "")) != "nan" else None
-        site_name = str(row.get("site", source_label))
+        description = _clean_str(row.get("description"))
+        site_name = _clean_str(row.get("site"), source_label)
         is_remote = row.get("is_remote", False)
 
         site_label = f"{site_name}"
@@ -164,7 +179,7 @@ def store_jobspy_results(conn: sqlite3.Connection, df, source_label: str) -> tup
             detail_scraped_at = now
 
         # Extract apply URL if JobSpy provided it
-        apply_url = str(row.get("job_url_direct", "")) if str(row.get("job_url_direct", "")) != "nan" else None
+        apply_url = _clean_str(row.get("job_url_direct"))
 
         try:
             conn.execute(

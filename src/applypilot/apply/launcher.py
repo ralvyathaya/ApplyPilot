@@ -147,7 +147,11 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
 
         # Skip manual ATS sites (unsolvable CAPTCHAs)
         from applypilot.config import is_manual_ats
-        apply_url = row["application_url"] or row["url"]
+        job = dict(row)
+        app_url = job.get("application_url")
+        if not app_url or not isinstance(app_url, str) or app_url.strip().lower() in ("none", "null"):
+            job["application_url"] = None
+        apply_url = job["application_url"] or job["url"]
         if is_manual_ats(apply_url):
             conn.execute(
                 "UPDATE jobs SET apply_status = 'manual', apply_error = 'manual ATS' WHERE url = ?",
@@ -166,7 +170,7 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
         """, (f"worker-{worker_id}", now, row["url"]))
         conn.commit()
 
-        return dict(row)
+        return job
     except Exception:
         conn.rollback()
         raise
