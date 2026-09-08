@@ -2,7 +2,7 @@
 Unified LLM client for ApplyPilot.
 
 Auto-detects provider from environment:
-  GEMINI_API_KEY  -> Google Gemini (default: gemini-2.0-flash)
+  GEMINI_API_KEY  -> Google Gemini (default: gemini-3.6-flash)
   OPENAI_API_KEY  -> OpenAI (default: gpt-4o-mini)
   LLM_URL         -> Local llama.cpp / Ollama compatible endpoint
 
@@ -11,6 +11,7 @@ LLM_MODEL env var overrides the model name for any provider.
 
 import logging
 import os
+import threading
 import time
 
 import httpx
@@ -35,7 +36,7 @@ def _detect_provider() -> tuple[str, str, str]:
     if gemini_key and not local_url:
         return (
             "https://generativelanguage.googleapis.com/v1beta/openai",
-            model_override or "gemini-2.0-flash",
+            model_override or "gemini-3.6-flash",
             gemini_key,
         )
 
@@ -69,6 +70,27 @@ _TIMEOUT = 120  # seconds
 # Base wait on first 429/503 (doubles each retry, caps at 60s).
 # Gemini free tier is 15 RPM = 4s minimum between requests; 10s gives headroom.
 _RATE_LIMIT_BASE_WAIT = 10
+
+# Proactive pacing: never fire requests faster than this. Hammering a free-tier
+# endpoint turns one 429 into a storm that never recovers, so we stay under the
+# limit instead of only reacting after the fact. Override with LLM_MIN_INTERVAL.
+# Default 4.5s ~= 13 RPM, safely under Gemini's free 15 RPM.
+_MIN_REQUEST_INTERVAL = float(os.environ.get("LLM_MIN_INTERVAL", "4.5"))
+_throttle_lock = threading.Lock()
+_last_request_at = 0.0
+
+
+def _throttle() -> None:
+    """Block so consecutive requests respect the minimum interval."""
+    global _last_request_at
+    if _MIN_REQUEST_INTERVAL <= 0:
+        return
+    with _throttle_lock:
+        now = time.monotonic()
+        wait = _last_request_at + _MIN_REQUEST_INTERVAL - now
+        if wait > 0:
+            time.sleep(wait)
+        _last_request_at = time.monotonic()
 
 
 _GEMINI_COMPAT_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
@@ -163,6 +185,10 @@ class LLMClient:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        if self._is_gemini:
+            # Gemini 3 may otherwise spend the entire output budget on thinking
+            # and return a successful response without message content.
+            payload["reasoning_effort"] = os.environ.get("LLM_REASONING_EFFORT", "minimal")
 
         resp = self._client.post(
             f"{self.base_url}/chat/completions",
@@ -181,7 +207,12 @@ class LLMClient:
     def _handle_compat_response(resp: httpx.Response) -> str:
         resp.raise_for_status()
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        choice = data["choices"][0]
+        content = choice.get("message", {}).get("content")
+        if not content:
+            reason = choice.get("finish_reason", "unknown")
+            raise RuntimeError(f"LLM returned no content (finish_reason={reason})")
+        return content
 
     # -- public API ---------------------------------------------------------
 
@@ -200,6 +231,7 @@ class LLMClient:
                 messages = [{"role": first["role"], "content": f"/no_think\n{first['content']}"}] + messages[1:]
 
         for attempt in range(_MAX_RETRIES):
+            _throttle()
             try:
                 # Route to native Gemini if we've already confirmed it's needed
                 if self._use_native_gemini:
