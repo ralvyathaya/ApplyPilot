@@ -106,7 +106,7 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
         if target_url:
             like = f"%{target_url.split('?')[0].rstrip('/')}%"
             row = conn.execute("""
-                SELECT url, title, site, application_url, tailored_resume_path,
+                SELECT url, title, company, site, application_url, tailored_resume_path,
                        fit_score, location, full_description, cover_letter_path
                 FROM jobs
                 WHERE (url = ? OR application_url = ? OR application_url LIKE ? OR url LIKE ?)
@@ -128,7 +128,7 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
                 url_clauses = " ".join(f"AND url NOT LIKE ?" for _ in blocked_patterns)
                 params.extend(blocked_patterns)
             row = conn.execute(f"""
-                SELECT url, title, site, application_url, tailored_resume_path,
+                SELECT url, title, company, site, application_url, tailored_resume_path,
                        fit_score, location, full_description, cover_letter_path
                 FROM jobs
                 WHERE tailored_resume_path IS NOT NULL
@@ -350,15 +350,15 @@ def run_job(job: dict, port: int, worker_id: int = 0,
     worker_dir = reset_worker_dir(worker_id)
 
     update_state(worker_id, status="applying", job_title=job["title"],
-                 company=job.get("site", ""), score=job.get("fit_score", 0),
+                 company=job.get("company") or job.get("site", ""), score=job.get("fit_score", 0),
                  start_time=time.time(), actions=0, last_action="starting")
-    add_event(f"[W{worker_id}] Starting: {job['title'][:40]} @ {job.get('site', '')}")
+    add_event(f"[W{worker_id}] Starting: {job['title'][:40]} @ {job.get('company') or job.get('site', '')}")
 
     worker_log = config.LOG_DIR / f"worker-{worker_id}.log"
     ts_header = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_header = (
         f"\n{'=' * 60}\n"
-        f"[{ts_header}] {job['title']} @ {job.get('site', '')}\n"
+        f"[{ts_header}] {job['title']} @ {job.get('company') or job.get('site', '')}\n"
         f"URL: {job.get('application_url') or job['url']}\n"
         f"Score: {job.get('fit_score', 'N/A')}/10\n"
         f"{'=' * 60}\n"
