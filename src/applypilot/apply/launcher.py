@@ -11,6 +11,7 @@ import logging
 import os
 import platform
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -298,6 +299,23 @@ def reset_failed() -> int:
 # Per-job execution
 # ---------------------------------------------------------------------------
 
+def _claude_binary() -> str:
+    """Resolve the Claude Code CLI executable path.
+
+    On Windows the npm-installed CLI is claude.cmd, and CreateProcess
+    (used by subprocess) only looks for claude.exe from the bare name
+    "claude" — it does not apply PATHEXT. shutil.which does, so resolve
+    through it and fail loudly when the CLI is missing.
+    """
+    claude_bin = shutil.which("claude")
+    if claude_bin is None:
+        raise FileNotFoundError(
+            "Claude Code CLI not found on PATH — "
+            "install from https://claude.ai/code"
+        )
+    return claude_bin
+
+
 def run_job(job: dict, port: int, worker_id: int = 0,
             model: str = "sonnet", dry_run: bool = False) -> tuple[str, int]:
     """Spawn a Claude Code session for one job application.
@@ -327,7 +345,7 @@ def run_job(job: dict, port: int, worker_id: int = 0,
 
     # Build claude command
     cmd = [
-        "claude",
+        _claude_binary(),
         "--model", model,
         "-p",
         "--mcp-config", str(mcp_config_path),
