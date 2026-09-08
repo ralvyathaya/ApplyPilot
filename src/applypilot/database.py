@@ -92,6 +92,7 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
             -- Discovery stage (smart_extract / job_search)
             url                   TEXT PRIMARY KEY,
             title                 TEXT,
+            company               TEXT,
             salary                TEXT,
             description           TEXT,
             location              TEXT,
@@ -147,6 +148,7 @@ _ALL_COLUMNS: dict[str, str] = {
     # Discovery
     "url": "TEXT PRIMARY KEY",
     "title": "TEXT",
+    "company": "TEXT",
     "salary": "TEXT",
     "description": "TEXT",
     "location": "TEXT",
@@ -324,6 +326,50 @@ def get_stats(conn: sqlite3.Connection | None = None) -> dict:
     ).fetchone()[0]
 
     return stats
+
+
+def store_discovered_jobs(conn: sqlite3.Connection, jobs) -> tuple[int, int]:
+    """Persist canonical discovery records without leaking adapter details.
+
+    Duplicate URLs are counted and left untouched. A supplied full description
+    marks the record as enriched so the detail stage does not fetch it again.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    new = 0
+    existing = 0
+
+    for job in jobs:
+        if not job.url:
+            continue
+        full_description = job.full_description or None
+        detail_scraped_at = now if full_description else None
+        try:
+            conn.execute(
+                "INSERT INTO jobs (url, title, company, salary, description, location, site, strategy, "
+                "discovered_at, full_description, application_url, detail_scraped_at, detail_error) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    job.url,
+                    job.title,
+                    job.company,
+                    job.salary,
+                    job.description,
+                    job.location,
+                    job.site,
+                    job.strategy,
+                    now,
+                    full_description,
+                    job.application_url,
+                    detail_scraped_at,
+                    job.detail_error,
+                ),
+            )
+            new += 1
+        except sqlite3.IntegrityError:
+            existing += 1
+
+    conn.commit()
+    return new, existing
 
 
 def store_jobs(conn: sqlite3.Connection, jobs: list[dict],
