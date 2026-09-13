@@ -36,6 +36,13 @@ IMPORTANT FACTORS:
 - For UI/UX and product design roles, do not penalize a candidate merely for not being a full-stack engineer
 - Be realistic about experience level vs. job requirements (years of experience, seniority)
 
+HARD CONSTRAINTS (apply BEFORE skill matching — any violation caps the score at 2):
+- Candidate is an Indonesian fresh graduate (~0 years formal experience, internships only), willing to relocate to Jakarta/Bandung/Jabodetabek.
+- Seniority: if the role requires 3+ years of experience, or the title says Senior/Lead/Manager/Head/Director/Principal/Staff, score 1-2. Roles asking 0-2 years are acceptable.
+- Location: onsite/hybrid roles based outside Jakarta/Jabodetabek/Bandung/West Java (Indonesia) score 1-2. Foreign-based roles score 1-2 unless explicitly remote worldwide AND junior level; remote restricted to a foreign country/timezone/work authorization scores 1-2. When the location field is empty or vague, judge from the title and description.
+- Field: finance/accounting/actuarial/audit/banking-operations roles score 1-2 (candidate excludes them). Government/civil-service (PNS/CPNS/kementerian) roles score 1-2.
+- Hard requirements the candidate cannot meet (professional licenses, unrelated specific degrees, CPA, etc.) score 1-2.
+
 RESPOND IN EXACTLY THIS FORMAT (no other text):
 SCORE: [1-10]
 KEYWORDS: [comma-separated ATS keywords from the job description that match or could match the candidate]
@@ -77,6 +84,13 @@ IMPORTANT FACTORS:
 - Consider transferable experience and strong personal projects for internships, trainee, entry-level, and fresh-graduate roles
 - For UI/UX and product design roles, do not penalize a candidate merely for not being a full-stack engineer
 - Be realistic about experience level vs. job requirements (years of experience, seniority)
+
+HARD CONSTRAINTS (apply BEFORE skill matching — any violation caps the score at 2):
+- Candidate is an Indonesian fresh graduate (~0 years formal experience, internships only), willing to relocate to Jakarta/Bandung/Jabodetabek.
+- Seniority: if the role requires 3+ years of experience, or the title says Senior/Lead/Manager/Head/Director/Principal/Staff, score 1-2. Roles asking 0-2 years are acceptable.
+- Location: onsite/hybrid roles based outside Jakarta/Jabodetabek/Bandung/West Java (Indonesia) score 1-2. Foreign-based roles score 1-2 unless explicitly remote worldwide AND junior level; remote restricted to a foreign country/timezone/work authorization scores 1-2. When the location field is empty or vague, judge from the title and description.
+- Field: finance/accounting/actuarial/audit/banking-operations roles score 1-2 (candidate excludes them). Government/civil-service (PNS/CPNS/kementerian) roles score 1-2.
+- Hard requirements the candidate cannot meet (professional licenses, unrelated specific degrees, CPA, etc.) score 1-2.
 
 RESPOND WITH ONLY A JSON ARRAY, one object per job, no other text:
 [{"id": <job id>, "score": <1-10>, "keywords": "<comma-separated ATS keywords>", "reasoning": "<2-3 sentences>"}]"""
