@@ -8,9 +8,13 @@ One adapter covers three independent boards:
     titles use a "Company: Position" format.
 
 Only postings open to worldwide/Indonesia candidates are kept, since the
-candidate cannot legally work in region-locked countries. Each board is
-fetched independently; a failing board degrades the run to "partial"
-instead of killing the others.
+candidate cannot legally work in region-locked countries. Each board
+applies strict location rules, and a region-lock phrase scanner over the
+title, location, and description catches fine-print restrictions such as
+"must be based in the U.S." even when the location field is empty.
+Indonesia is never treated as a lock. Each board is fetched independently;
+a failing board degrades the run to "partial" instead of killing the
+others.
 """
 
 from __future__ import annotations
@@ -73,16 +77,165 @@ RELEVANT_TITLE_TOKENS = frozenset(
     }
 )
 RELEVANT_LOCATION_TOKENS = ("worldwide", "anywhere", "indonesia", "global")
+# Location labels that carry no region information at all. Postings labeled
+# this way (or unlabeled) are kept, and the region-lock scanner below makes
+# the final call from the title/description text.
+GENERIC_REMOTE_LABELS = frozenset(
+    {"remote", "remoto", "remote work", "work from home", "fully remote", "100% remote"}
+)
 _WORD_SPLIT_RE = re.compile(r"[^a-z0-9]+")
 WWR_FULL_DESCRIPTION_MIN_CHARS = 400
 
+# Countries/regions a lock phrase can point at. Indonesia is deliberately
+# absent: the candidate lives there, so "must be based in Indonesia" is an
+# acceptance signal, never a rejection. High precision matters more than
+# full coverage, so ambiguous short forms are left out where risky.
+_LOCKED_REGIONS = (
+    "united states", "u.s.a", "u.s", "usa", "us", "america",
+    "canada",
+    "united kingdom", "great britain", "england", "scotland", "wales", "uk",
+    "europe", "european", "european union", "emea", "eu",
+    "north america", "south america", "latin america", "latam", "americas",
+    "brazil", "mexico", "argentina", "colombia", "chile",
+    "spain", "portugal", "germany", "france", "italy", "netherlands",
+    "belgium", "switzerland", "austria", "sweden", "norway", "denmark",
+    "finland", "poland", "czech", "hungary", "romania", "greece",
+    "ireland", "ukraine", "russia", "lithuania", "turkey", "israel",
+    "uae", "dubai", "saudi", "qatar", "egypt", "morocco",
+    "nigeria", "kenya", "south africa", "africa",
+    "india", "pakistan", "bangladesh", "sri lanka", "nepal",
+    "philippines", "vietnam", "thailand", "malaysia", "singapore",
+    "china", "hong kong", "taiwan", "japan", "korea", "seoul",
+    "australia", "new zealand", "oceania",
+)
+_THE = r"(?:the\s+)?"
+_REGION_ALTERNATION = "|".join(
+    re.escape(region) for region in sorted(_LOCKED_REGIONS, key=len, reverse=True)
+)
+_REGION = rf"\b(?:{_REGION_ALTERNATION})\b"
+
+# High-precision lock patterns only. A bare "based in <region>" without a
+# requirement word usually describes the company HQ rather than a hiring
+# restriction, and timezone overlap wishes (CET/EST) are workable from
+# Indonesia, so neither is matched.
+_REGION_LOCK_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        # "US only", "India - only"
+        rf"{_REGION}\s*[-\u2013\u2014]?\s*\bonly\b",
+        # "Remote - US", "Remote | South Africa", "remote from Canada"
+        rf"\bremote\s*[-\u2013\u2014|/,]\s*(?:in\s+|from\s+)?{_THE}{_REGION}",
+        rf"\bremote\s+in\s+{_THE}{_REGION}",
+        # "must be based in the U.S.", "required to reside within Canada"
+        (
+            rf"\b(?:must|need to|required to|should)\s+(?:be\s+)?"
+            rf"(?:based|located|resident|reside|residing|living|situated)"
+            rf"\s+(?:in|within)\s+{_THE}{_REGION}"
+        ),
+        # "residents of the UK", "citizens from India"
+        rf"\b(?:residents?|citizens?|nationals?)\s+(?:of|from)\s+{_THE}{_REGION}",
+        # "eligible to work in Canada", "authorized to work in the United States"
+        (
+            rf"\b(?:eligible to work|eligibility to work|right to work|work authorization|"
+            rf"authorized to work|authorised to work|work permit)\b"
+            rf"[^.!?]{{0,80}}?\bin\b[^.!?]{{0,60}}?{_THE}{_REGION}"
+        ),
+        # "US work authorization", "work permit for India"
+        rf"{_THE}{_REGION}\s+(?:work authorization|work permit|work visa)s?\b",
+        rf"\b(?:work authorization|work permit|work visa)s?\s+(?:for|in)\s+{_THE}{_REGION}",
+        # "restricted to US candidates", "limited to residents of Brazil"
+        rf"\b(?:restricted|limited)\s+to\b[^.!?]{{0,40}}?{_THE}{_REGION}",
+        # "This position is based in Germany", "you will be living in Spain"
+        (
+            rf"\b(?:positions?|roles?|jobs?|you|candidates?|applicants?|incumbents?)\b"
+            rf"[^.!?]{{0,40}}?"
+            rf"\b(?:based|located|resident|reside|living|situated|working)"
+            rf"\s+(?:in|within|from)\s+{_THE}{_REGION}"
+        ),
+        # "based in Mexico or Brazil", "Location: based in the Netherlands"
+        (
+            rf"\bbased\s+in\s+{_THE}{_REGION}\b[^.!?]{{0,20}}?\b(?:or|and)\s+{_REGION}"
+            rf"|\blocation\b[^.!?]{{0,30}}?\bbased\s+in\s+{_THE}{_REGION}"
+        ),
+        # "South Africa - Remote", "Netherlands - Field based"
+        rf"{_THE}{_REGION}\s*[-\u2013\u2014|/,]\s*(?:remote|field|hybrid|onsite)\b",
+        # "work from anywhere in the Philippines" ("anywhere in the world" is safe:
+        # "world" is not a locked region)
+        rf"\banywhere\s+(?:in|across|within)\s+{_THE}{_REGION}",
+        # "Philippines (Remote)"
+        rf"{_THE}{_REGION}\s*\(\s*(?:remote|hybrid|onsite)\s*\)",
+        # "staffing partners across the United States", but not "across US time
+        # zones" -- timezone overlap is workable from Indonesia, a hiring pool
+        # "across <region>" is not.
+        rf"\bacross\s+{_THE}{_REGION}\b(?!\.?\s*time)",
+        # "only applicants from India", "we hire only in Europe"
+        rf"\bonly\b[^.!?]{{0,30}}?\b(?:from|in)\s+{_THE}{_REGION}",
+    )
+)
+# "(US)" / "(Remote - India)" style suffixes; only trusted in title/location
+# text because parentheses inside descriptions are too noisy.
+_PAREN_REGION_RE = re.compile(
+    rf"\(\s*(?:remote\s*[-\u2013\u2014]\s*)?{_THE}{_REGION}\s*\)", re.IGNORECASE
+)
+
+# Some boards serve double-encoded text (UTF-8 bytes decoded as latin-1),
+# turning an en dash into "\u00e2\u0080\u0093". Repair the sequences that
+# matter for lock matching before scanning.
+_MOJIBAKE_FIXES = (
+    ("\u00e2\u0080\u0093", "\u2013"),  # en dash
+    ("\u00e2\u0080\u0094", "\u2014"),  # em dash
+    ("\u00e2\u0080\u00a2", "\u2022"),  # bullet
+    ("\u00e2\u0080\u0099", "\u2019"),  # right single quote
+)
+
+
+def _fix_mojibake(text: str) -> str:
+    for broken, fixed in _MOJIBAKE_FIXES:
+        text = text.replace(broken, fixed)
+    return text
+
 
 def location_is_worldwide(location: str | None) -> bool:
-    """True when a posting accepts candidates anywhere (or is unlabeled)."""
+    """True when a posting accepts candidates anywhere or omits the region.
+
+    Empty values and bare "Remote"-style labels carry no region information,
+    so those postings are kept and the region-lock scanner makes the final
+    call from the description text.
+    """
     if not location:
         return True
-    text = str(location).lower()
+    text = str(location).lower().strip()
+    if text in GENERIC_REMOTE_LABELS:
+        return True
     return any(token in text for token in RELEVANT_LOCATION_TOKENS)
+
+
+def wwr_region_is_worldwide(region: str | None) -> bool:
+    """True only for explicit worldwide WeWorkRemotely regions.
+
+    WWR always labels its regions, so an unlabeled item is treated as
+    region-locked and dropped instead of silently kept.
+    """
+    if not region:
+        return False
+    text = str(region).lower()
+    return "anywhere" in text or "world" in text
+
+
+def region_lock_detected(short_text: str | None, long_text: str | None = None) -> bool:
+    """True when the text contains a high-confidence region-lock phrase.
+
+    short_text is the title/location line, where parenthesized region tags
+    like "(US)" also count as locks; long_text is the cleaned description.
+    Indonesia never appears in the locked-region list, so a requirement to
+    be based there is not a rejection.
+    """
+    short = _fix_mojibake(short_text or "")
+    long_text = _fix_mojibake(long_text) if long_text else None
+    if _PAREN_REGION_RE.search(short):
+        return True
+    haystack = f"{short}\n{long_text}" if long_text else short
+    return any(pattern.search(haystack) for pattern in _REGION_LOCK_PATTERNS)
 
 
 def title_is_relevant(title: str, tags: list | None = None) -> bool:
@@ -107,12 +260,16 @@ def normalize_remotive_job(item: dict) -> DiscoveredJob | None:
     title = item.get("title")
     if not url or not title:
         return None
+    # Remotive reliably labels the candidate location; unlabeled means
+    # unknown scope and is dropped like any foreign region.
     location = item.get("candidate_required_location")
-    if not location_is_worldwide(location):
+    if not location or not location_is_worldwide(location):
         return None
     if not title_is_relevant(title, item.get("tags")):
         return None
     description = clean_html_text(item.get("description"))
+    if region_lock_detected(f"{title} {location}", description):
+        return None
     return DiscoveredJob(
         url=str(url),
         title=str(title),
@@ -155,6 +312,10 @@ def normalize_remoteok_job(item) -> DiscoveredJob | None:
     if not title_is_relevant(title, item.get("tags")):
         return None
     description = clean_html_text(item.get("description"))
+    # RemoteOK leaves the location empty for most postings, so the scanner
+    # is the only defense against region-locked fine print.
+    if region_lock_detected(f"{title} {location or ''}", description):
+        return None
     application_url = item.get("apply_url")
     if application_url in (None, "", url):
         application_url = None
@@ -201,7 +362,7 @@ def normalize_wwr_job(item: dict) -> DiscoveredJob | None:
     if not link or not raw_title:
         return None
     region = item.get("region") or ""
-    if not location_is_worldwide(region):
+    if not wwr_region_is_worldwide(region):
         return None
 
     company, separator, position = raw_title.partition(":")
@@ -212,6 +373,8 @@ def normalize_wwr_job(item: dict) -> DiscoveredJob | None:
         return None
 
     description = clean_html_text(item.get("description"))
+    if region_lock_detected(f"{position} {region}", description):
+        return None
     full_description = (
         description if description and len(description) >= WWR_FULL_DESCRIPTION_MIN_CHARS else None
     )
