@@ -1,7 +1,7 @@
 import pandas as pd
 
 from applypilot.database import close_connection, init_db
-from applypilot.discovery.jobspy import _clean_str, store_jobspy_results
+from applypilot.discovery.jobspy import _clean_str, _location_ok, store_jobspy_results
 
 
 def _row(**overrides):
@@ -57,3 +57,25 @@ def test_store_jobspy_results_keeps_real_direct_url(tmp_path):
     row = conn.execute("SELECT * FROM jobs").fetchone()
     assert row["application_url"] == "https://jobs.example.com/apply/1"
     close_connection(db_path)
+
+
+ACCEPT_LOCS = ["Jakarta", "Jabodetabek", "Bandung", "West Java", "Indonesia"]
+REJECT_LOCS = ["United States", "USA", "Canada", "Spain", "India", "Australia"]
+
+
+def test_location_ok_rejects_foreign_regions_even_when_remote():
+    """Regression: remote-labeled foreign regions used to bypass the reject list."""
+    assert not _location_ok("Remote - Spain", ACCEPT_LOCS, REJECT_LOCS)
+    assert not _location_ok("Canada (Remote)", ACCEPT_LOCS, REJECT_LOCS)
+    assert not _location_ok("United States", ACCEPT_LOCS, REJECT_LOCS)
+
+
+def test_location_ok_keeps_unlabeled_remote_and_local_matches():
+    assert _location_ok("Remote", ACCEPT_LOCS, REJECT_LOCS)
+    assert _location_ok("Anywhere", ACCEPT_LOCS, REJECT_LOCS)
+    assert _location_ok("Work from home", ACCEPT_LOCS, REJECT_LOCS)
+    assert _location_ok(None, ACCEPT_LOCS, REJECT_LOCS)
+    assert _location_ok("Jakarta, Indonesia", ACCEPT_LOCS, REJECT_LOCS)
+    # "India" must not match inside "Indonesia".
+    assert _location_ok("Bandung, West Java, Indonesia", ACCEPT_LOCS, REJECT_LOCS)
+    assert not _location_ok("Surabaya, East Java", ACCEPT_LOCS, REJECT_LOCS)

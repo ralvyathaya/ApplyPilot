@@ -89,22 +89,23 @@ def _load_location_config(search_cfg: dict) -> tuple[list[str], list[str]]:
 def _location_ok(location: str | None, accept: list[str], reject: list[str]) -> bool:
     """Check if a job location passes the user's location filter.
 
-    Remote jobs are always accepted. Non-remote jobs must match an accept
-    pattern and not match a reject pattern.
+    Reject-listed regions lose even when the posting is labeled remote
+    ("Remote - Spain" is not workable from Indonesia). Other remote jobs
+    are always accepted. Non-remote jobs must match an accept pattern.
     """
     if not location:
         return True  # unknown location -- keep it, let scorer decide
 
     loc = location.lower()
 
-    # Remote jobs always OK
-    if any(r in loc for r in ("remote", "anywhere", "work from home", "wfh", "distributed")):
-        return True
-
-    # Reject non-remote matches
+    # Reject listed regions, remote label or not
     for r in reject:
         if r.lower() in loc:
             return False
+
+    # Remaining remote jobs always OK
+    if any(r in loc for r in ("remote", "anywhere", "work from home", "wfh", "distributed")):
+        return True
 
     # Accept matches
     for a in accept:

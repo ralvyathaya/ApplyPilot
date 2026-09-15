@@ -58,15 +58,18 @@ def _load_location_filter(search_cfg: dict | None = None):
 
 
 def _location_ok(location: str | None, accept: list[str], reject: list[str]) -> bool:
-    """Check if a job location passes the user's location filter."""
+    """Check if a job location passes the user's location filter.
+
+    Reject-listed regions lose even when the posting is labeled remote.
+    """
     if not location:
         return True
     loc = location.lower()
-    if any(r in loc for r in ("remote", "anywhere", "work from home", "wfh", "distributed")):
-        return True
     for r in reject:
         if r.lower() in loc:
             return False
+    if any(r in loc for r in ("remote", "anywhere", "work from home", "wfh", "distributed")):
+        return True
     for a in accept:
         if a.lower() in loc:
             return True
