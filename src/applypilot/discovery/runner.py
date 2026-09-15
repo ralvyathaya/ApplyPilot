@@ -37,11 +37,32 @@ def _run_hiringcafe(search_config: dict, workers: int) -> dict:
     return discover_hiringcafe(search_config)
 
 
+def _run_jobstreet(search_config: dict, workers: int) -> dict:
+    from applypilot.discovery.jobstreet import discover_jobstreet
+
+    return discover_jobstreet(search_config)
+
+
+def _run_glints(search_config: dict, workers: int) -> dict:
+    from applypilot.discovery.glints import discover_glints
+
+    return discover_glints(search_config)
+
+
+def _run_remoteboards(search_config: dict, workers: int) -> dict:
+    from applypilot.discovery.remoteboards import discover_remoteboards
+
+    return discover_remoteboards(search_config)
+
+
 ADAPTERS: dict[str, AdapterRunner] = {
     "jobspy": _run_jobspy,
     "workday": _run_workday,
     "smartextract": _run_smartextract,
     "hiringcafe": _run_hiringcafe,
+    "jobstreet": _run_jobstreet,
+    "glints": _run_glints,
+    "remoteboards": _run_remoteboards,
 }
 
 

@@ -93,6 +93,31 @@ boards:
   - zip_recruiter
   - google
 
+# Discovery adapters are opt-in. Custom adapters complement jobspy:
+#   jobstreet    -- JobStreet Indonesia via a visible Chrome window
+#   glints       -- Glints Indonesia fresh-graduate search (plain HTTP)
+#   remoteboards -- Remotive + RemoteOK + WeWorkRemotely (plain HTTP)
+#   hiringcafe   -- HiringCafe via a visible Chrome window
+discovery:
+  adapters:
+    - jobspy
+  adapter_config:
+    jobstreet:
+      max_tier: 2
+      max_pages_per_query: 1
+      delay_seconds: 1.5
+      headless: true
+      timeout_ms: 60000
+    glints:
+      max_tier: 2
+      delay_seconds: 1.5
+      max_min_experience: 1
+    remoteboards:
+      max_tier: 2
+      days_back: 30
+      delay_seconds: 1.0
+      limit_per_query: 50
+
 # Search defaults
 defaults:
   results_per_site: 100  # Max results per board per query
