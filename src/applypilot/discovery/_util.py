@@ -74,3 +74,33 @@ def published_within(
         return True
     now = now or datetime.now(UTC)
     return (now - parsed).days <= days_back
+
+
+def hours_since_published(
+    value: str | None,
+    *,
+    now: datetime | None = None,
+) -> float | None:
+    """Hours elapsed since publication, or None if date is unparseable."""
+    parsed = parse_published_date(value)
+    if parsed is None:
+        return None
+    now = now or datetime.now(UTC)
+    delta = now - parsed
+    return max(0.0, delta.total_seconds() / 3600.0)
+
+
+def published_within_days(
+    value: str | None,
+    days: int,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Check if posting is within days cutoff; undated postings pass."""
+    if days <= 0:
+        return True
+    parsed = parse_published_date(value)
+    if parsed is None:
+        return True
+    now = now or datetime.now(UTC)
+    return (now - parsed).total_seconds() <= days * 86400

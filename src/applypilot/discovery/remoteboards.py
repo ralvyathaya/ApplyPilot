@@ -280,6 +280,7 @@ def normalize_remotive_job(item: dict) -> DiscoveredJob | None:
         site="Remotive",
         strategy="remoteboards_http",
         full_description=description,
+        posted_at=item.get("publication_date"),
     )
 
 
@@ -330,6 +331,7 @@ def normalize_remoteok_job(item) -> DiscoveredJob | None:
         strategy="remoteboards_http",
         full_description=description,
         application_url=str(application_url) if application_url else None,
+        posted_at=item.get("date"),
     )
 
 
@@ -388,6 +390,7 @@ def normalize_wwr_job(item: dict) -> DiscoveredJob | None:
         site="WeWorkRemotely",
         strategy="remoteboards_rss",
         full_description=full_description,
+        posted_at=item.get("pubDate"),
     )
 
 

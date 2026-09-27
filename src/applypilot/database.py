@@ -99,6 +99,7 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
             site                  TEXT,
             strategy              TEXT,
             discovered_at         TEXT,
+            posted_at             TEXT,
 
             -- Enrichment stage (detail_scraper)
             full_description      TEXT,
@@ -155,6 +156,7 @@ _ALL_COLUMNS: dict[str, str] = {
     "site": "TEXT",
     "strategy": "TEXT",
     "discovered_at": "TEXT",
+    "posted_at": "TEXT",
     # Enrichment
     "full_description": "TEXT",
     "application_url": "TEXT",
@@ -346,8 +348,8 @@ def store_discovered_jobs(conn: sqlite3.Connection, jobs) -> tuple[int, int]:
         try:
             conn.execute(
                 "INSERT INTO jobs (url, title, company, salary, description, location, site, strategy, "
-                "discovered_at, full_description, application_url, detail_scraped_at, detail_error) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "discovered_at, posted_at, full_description, application_url, detail_scraped_at, detail_error) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job.url,
                     job.title,
@@ -358,6 +360,7 @@ def store_discovered_jobs(conn: sqlite3.Connection, jobs) -> tuple[int, int]:
                     job.site,
                     job.strategy,
                     now,
+                    job.posted_at,
                     full_description,
                     job.application_url,
                     detail_scraped_at,

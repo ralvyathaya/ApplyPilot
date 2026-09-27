@@ -18,3 +18,4 @@ class DiscoveredJob:
     full_description: str | None = None
     application_url: str | None = None
     detail_error: str | None = None
+    posted_at: str | None = None
