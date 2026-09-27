@@ -1,0 +1,122 @@
+# Direct ATS employer registry for ApplyPilot
+# Direct company career portals using public JSON APIs (Greenhouse, Lever, Ashby).
+# Zero scraping hurdles, zero bot challenges, 100% genuine active listings.
+#
+# Supported ats types:
+#   - greenhouse: https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true
+#   - ashby: https://api.ashbyhq.com/posting-api/job-board/{slug}
+#   - lever: https://api.lever.co/v0/postings/{slug}?mode=json
+
+companies:
+  # ── Greenhouse Boards (Remote / Global / APAC) ──────────────────────────
+  gitlab:
+    name: "GitLab"
+    ats: "greenhouse"
+    slug: "gitlab"
+
+  canonical:
+    name: "Canonical"
+    ats: "greenhouse"
+    slug: "canonical"
+
+  cloudflare:
+    name: "Cloudflare"
+    ats: "greenhouse"
+    slug: "cloudflare"
+
+  stripe:
+    name: "Stripe"
+    ats: "greenhouse"
+    slug: "stripe"
+
+  figma:
+    name: "Figma"
+    ats: "greenhouse"
+    slug: "figma"
+
+  reddit:
+    name: "Reddit"
+    ats: "greenhouse"
+    slug: "reddit"
+
+  asana:
+    name: "Asana"
+    ats: "greenhouse"
+    slug: "asana"
+
+  elastic:
+    name: "Elastic"
+    ats: "greenhouse"
+    slug: "elastic"
+
+  datadog:
+    name: "Datadog"
+    ats: "greenhouse"
+    slug: "datadog"
+
+  coinbase:
+    name: "Coinbase"
+    ats: "greenhouse"
+    slug: "coinbase"
+
+  robinhood:
+    name: "Robinhood"
+    ats: "greenhouse"
+    slug: "robinhood"
+
+  wise:
+    name: "Wise"
+    ats: "greenhouse"
+    slug: "wise"
+
+  monzo:
+    name: "Monzo"
+    ats: "greenhouse"
+    slug: "monzo"
+
+  # ── Ashby Modern Tech Boards ───────────────────────────────────────────
+  linear:
+    name: "Linear"
+    ats: "ashby"
+    slug: "linear"
+
+  supabase:
+    name: "Supabase"
+    ats: "ashby"
+    slug: "supabase"
+
+  notion:
+    name: "Notion"
+    ats: "ashby"
+    slug: "notion"
+
+  miro:
+    name: "Miro"
+    ats: "ashby"
+    slug: "miro"
+
+  docker:
+    name: "Docker"
+    ats: "ashby"
+    slug: "docker"
+
+  ramp:
+    name: "Ramp"
+    ats: "ashby"
+    slug: "ramp"
+
+  replit:
+    name: "Replit"
+    ats: "ashby"
+    slug: "replit"
+
+  perplexity:
+    name: "Perplexity AI"
+    ats: "ashby"
+    slug: "perplexity"
+
+  # ── Lever Boards ───────────────────────────────────────────────────────
+  palantir:
+    name: "Palantir"
+    ats: "lever"
+    slug: "palantir"

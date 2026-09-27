@@ -55,6 +55,18 @@ def _run_remoteboards(search_config: dict, workers: int) -> dict:
     return discover_remoteboards(search_config)
 
 
+def _run_direct_ats(search_config: dict, workers: int) -> dict:
+    from applypilot.discovery.direct_ats import discover_direct_ats
+
+    return discover_direct_ats(search_config)
+
+
+def _run_kalibrr(search_config: dict, workers: int) -> dict:
+    from applypilot.discovery.kalibrr import discover_kalibrr
+
+    return discover_kalibrr(search_config)
+
+
 ADAPTERS: dict[str, AdapterRunner] = {
     "jobspy": _run_jobspy,
     "workday": _run_workday,
@@ -63,6 +75,8 @@ ADAPTERS: dict[str, AdapterRunner] = {
     "jobstreet": _run_jobstreet,
     "glints": _run_glints,
     "remoteboards": _run_remoteboards,
+    "direct_ats": _run_direct_ats,
+    "kalibrr": _run_kalibrr,
 }
 
 
