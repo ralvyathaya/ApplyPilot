@@ -100,20 +100,33 @@ _GEMINI_NATIVE_BASE = "https://generativelanguage.googleapis.com/v1beta"
 class LLMClient:
     """Thin LLM client supporting OpenAI-compatible and native Gemini endpoints.
 
-    For Gemini keys, starts on the OpenAI-compat layer. On a 403 (which
-    happens with preview/experimental models not exposed via compat), it
-    automatically switches to the native generateContent API and stays there
-    for the lifetime of the process.
+    Supports automatic model fallback across candidate models (configured via
+    comma-separated LLM_MODEL or LLM_FALLBACK_MODELS).
     """
 
-    def __init__(self, base_url: str, model: str, api_key: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        api_key: str,
+        fallback_models: list[str] | None = None,
+    ) -> None:
         self.base_url = base_url
-        self.model = model
         self.api_key = api_key
         self._client = httpx.Client(timeout=_TIMEOUT)
-        # True once we've confirmed the native Gemini API works for this model
         self._use_native_gemini: bool = False
         self._is_gemini: bool = base_url.startswith(_GEMINI_COMPAT_BASE)
+
+        # Parse primary model and extra fallbacks from model string
+        models = [m.strip() for m in str(model).split(",") if m.strip()]
+        self.model = models[0] if models else "local-model"
+        extra_from_model = models[1:] if len(models) > 1 else []
+
+        env_fallback_str = os.environ.get("LLM_FALLBACK_MODELS", "")
+        env_fallbacks = [m.strip() for m in env_fallback_str.split(",") if m.strip()]
+
+        combined = extra_from_model + (fallback_models or []) + env_fallbacks
+        self.fallback_models: list[str] = [m for m in dict.fromkeys(combined) if m != self.model]
 
     # -- Native Gemini API --------------------------------------------------
 
@@ -122,15 +135,10 @@ class LLMClient:
         messages: list[dict],
         temperature: float,
         max_tokens: int,
+        model_name: str | None = None,
     ) -> str:
-        """Call the native Gemini generateContent API.
-
-        Used automatically when the OpenAI-compat endpoint returns 403,
-        which happens for preview/experimental models not exposed via compat.
-
-        Converts OpenAI-style messages to Gemini's contents/systemInstruction
-        format transparently.
-        """
+        """Call the native Gemini generateContent API."""
+        target_model = model_name or self.model
         contents: list[dict] = []
         system_parts: list[dict] = []
 
@@ -142,7 +150,6 @@ class LLMClient:
             elif role == "user":
                 contents.append({"role": "user", "parts": [{"text": text}]})
             elif role == "assistant":
-                # Gemini uses "model" instead of "assistant"
                 contents.append({"role": "model", "parts": [{"text": text}]})
 
         payload: dict = {
@@ -155,7 +162,7 @@ class LLMClient:
         if system_parts:
             payload["systemInstruction"] = {"parts": system_parts}
 
-        url = f"{_GEMINI_NATIVE_BASE}/models/{self.model}:generateContent"
+        url = f"{_GEMINI_NATIVE_BASE}/models/{target_model}:generateContent"
         resp = self._client.post(
             url,
             json=payload,
@@ -173,21 +180,21 @@ class LLMClient:
         messages: list[dict],
         temperature: float,
         max_tokens: int,
+        model_name: str | None = None,
     ) -> str:
         """Call the OpenAI-compatible endpoint."""
+        target_model = model_name or self.model
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
         payload = {
-            "model": self.model,
+            "model": target_model,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
         if self._is_gemini:
-            # Gemini 3 may otherwise spend the entire output budget on thinking
-            # and return a successful response without message content.
             payload["reasoning_effort"] = os.environ.get("LLM_REASONING_EFFORT", "minimal")
 
         resp = self._client.post(
@@ -196,8 +203,6 @@ class LLMClient:
             headers=headers,
         )
 
-        # 403 on Gemini compat = model not available on compat layer.
-        # Raise a specific sentinel so chat() can switch to native API.
         if resp.status_code == 403 and self._is_gemini:
             raise _GeminiCompatForbidden(resp)
 
@@ -208,7 +213,11 @@ class LLMClient:
         resp.raise_for_status()
         data = resp.json()
         choice = data["choices"][0]
-        content = choice.get("message", {}).get("content")
+        msg = choice.get("message", {})
+        content = msg.get("content")
+        # Handle reasoning models where final output or thoughts may be in reasoning_content
+        if not content:
+            content = msg.get("reasoning_content")
         if not content:
             reason = choice.get("finish_reason", "unknown")
             raise RuntimeError(f"LLM returned no content (finish_reason={reason})")
@@ -222,80 +231,133 @@ class LLMClient:
         temperature: float = 0.0,
         max_tokens: int = 4096,
     ) -> str:
-        """Send a chat completion request and return the assistant message text."""
-        # Qwen3 optimization: prepend /no_think to skip chain-of-thought
-        # reasoning, saving tokens on structured extraction tasks.
-        if "qwen" in self.model.lower() and messages:
-            first = messages[0]
-            if first.get("role") == "user" and not first["content"].startswith("/no_think"):
-                messages = [{"role": first["role"], "content": f"/no_think\n{first['content']}"}] + messages[1:]
+        """Send a chat completion request with automatic model fallback."""
+        candidates = [self.model] + [m for m in self.fallback_models if m != self.model]
+        last_error = None
 
-        for attempt in range(_MAX_RETRIES):
-            _throttle()
-            try:
-                # Route to native Gemini if we've already confirmed it's needed
-                if self._use_native_gemini:
-                    return self._chat_native_gemini(messages, temperature, max_tokens)
+        for model_idx, current_model in enumerate(candidates):
+            has_fallback = model_idx < len(candidates) - 1
+            next_model = candidates[model_idx + 1] if has_fallback else None
 
-                return self._chat_compat(messages, temperature, max_tokens)
+            # Qwen3 optimization: prepend /no_think to skip chain-of-thought
+            req_messages = messages
+            if "qwen" in current_model.lower() and req_messages:
+                first = req_messages[0]
+                if first.get("role") == "user" and not first["content"].startswith("/no_think"):
+                    req_messages = [{"role": first["role"], "content": f"/no_think\n{first['content']}"}] + req_messages[1:]
 
-            except _GeminiCompatForbidden as exc:
-                # Model not available on OpenAI-compat layer — switch to native.
-                log.warning(
-                    "Gemini compat endpoint returned 403 for model '%s'. "
-                    "Switching to native generateContent API. "
-                    "(Preview/experimental models are often compat-only on native.)",
-                    self.model,
-                )
-                self._use_native_gemini = True
-                # Retry immediately with native — don't count as a rate-limit wait
+            for attempt in range(_MAX_RETRIES):
+                _throttle()
                 try:
-                    return self._chat_native_gemini(messages, temperature, max_tokens)
-                except httpx.HTTPStatusError as native_exc:
-                    raise RuntimeError(
-                        f"Both Gemini endpoints failed. Compat: 403 Forbidden. "
-                        f"Native: {native_exc.response.status_code} — "
-                        f"{native_exc.response.text[:200]}"
-                    ) from native_exc
+                    if self._use_native_gemini:
+                        return self._chat_native_gemini(req_messages, temperature, max_tokens, model_name=current_model)
+                    return self._chat_compat(req_messages, temperature, max_tokens, model_name=current_model)
 
-            except httpx.HTTPStatusError as exc:
-                resp = exc.response
-                if resp.status_code in (429, 503) and attempt < _MAX_RETRIES - 1:
-                    # Respect Retry-After header if provided (Gemini sends this).
-                    retry_after = (
-                        resp.headers.get("Retry-After")
-                        or resp.headers.get("X-RateLimit-Reset-Requests")
+                except _GeminiCompatForbidden:
+                    log.warning(
+                        "Gemini compat endpoint returned 403 for model '%s'. "
+                        "Switching to native generateContent API.",
+                        current_model,
                     )
-                    if retry_after:
-                        try:
-                            wait = float(retry_after)
-                        except (ValueError, TypeError):
-                            wait = _RATE_LIMIT_BASE_WAIT * (2 ** attempt)
-                    else:
+                    self._use_native_gemini = True
+                    try:
+                        return self._chat_native_gemini(req_messages, temperature, max_tokens, model_name=current_model)
+                    except httpx.HTTPStatusError as native_exc:
+                        last_error = native_exc
+                        if has_fallback:
+                            log.warning("Model '%s' failed on native Gemini (%s). Trying fallback '%s'...", current_model, native_exc, next_model)
+                            break
+                        raise RuntimeError(
+                            f"Both Gemini endpoints failed for '{current_model}': {native_exc.response.status_code}"
+                        ) from native_exc
+
+                except httpx.HTTPStatusError as exc:
+                    resp = exc.response
+                    last_error = exc
+
+                    # Check for quota exhaustion message
+                    err_msg = ""
+                    try:
+                        err_msg = resp.json().get("error", {}).get("message", "")
+                    except Exception:
+                        err_msg = resp.text[:120]
+
+                    is_quota_exhausted = (
+                        resp.status_code == 429
+                        and any(kw in err_msg.lower() for kw in ("quota", "exhausted", "limit reached", "balance"))
+                    )
+
+                    # If quota exhausted or model missing or persistent server error, immediately try fallback
+                    if has_fallback and (is_quota_exhausted or resp.status_code in (404, 500, 502, 503)):
+                        log.warning(
+                            "Model '%s' failed (HTTP %d: %s). Immediately falling back to '%s'...",
+                            current_model, resp.status_code, err_msg or resp.reason_phrase, next_model
+                        )
+                        break
+
+                    # Transient rate limit retry
+                    if resp.status_code in (429, 503) and attempt < _MAX_RETRIES - 1:
+                        retry_after = (
+                            resp.headers.get("Retry-After")
+                            or resp.headers.get("X-RateLimit-Reset-Requests")
+                        )
+                        if retry_after:
+                            try:
+                                wait = float(retry_after)
+                            except (ValueError, TypeError):
+                                wait = _RATE_LIMIT_BASE_WAIT * (2 ** attempt)
+                        else:
+                            wait = min(_RATE_LIMIT_BASE_WAIT * (2 ** attempt), 60)
+
+                        log.warning(
+                            "Model '%s' rate limited (HTTP %s). Waiting %ds before retry %d/%d.",
+                            current_model, resp.status_code, wait, attempt + 1, _MAX_RETRIES,
+                        )
+                        time.sleep(wait)
+                        continue
+
+                    if has_fallback:
+                        log.warning(
+                            "Model '%s' exhausted retries (HTTP %d: %s). Falling back to '%s'...",
+                            current_model, resp.status_code, err_msg or resp.reason_phrase, next_model
+                        )
+                        break
+
+                    raise
+
+                except httpx.TimeoutException as exc:
+                    last_error = exc
+                    if attempt < _MAX_RETRIES - 1:
                         wait = min(_RATE_LIMIT_BASE_WAIT * (2 ** attempt), 60)
+                        log.warning(
+                            "Model '%s' request timed out, retrying in %ds (attempt %d/%d)",
+                            current_model, wait, attempt + 1, _MAX_RETRIES,
+                        )
+                        time.sleep(wait)
+                        continue
 
-                    log.warning(
-                        "LLM rate limited (HTTP %s). Waiting %ds before retry %d/%d. "
-                        "Tip: Gemini free tier = 15 RPM. Consider a paid account "
-                        "or switching to a local model.",
-                        resp.status_code, wait, attempt + 1, _MAX_RETRIES,
-                    )
-                    time.sleep(wait)
-                    continue
-                raise
+                    if has_fallback:
+                        log.warning(
+                            "Model '%s' timed out after all retries. Falling back to '%s'...",
+                            current_model, next_model
+                        )
+                        break
 
-            except httpx.TimeoutException:
-                if attempt < _MAX_RETRIES - 1:
-                    wait = min(_RATE_LIMIT_BASE_WAIT * (2 ** attempt), 60)
-                    log.warning(
-                        "LLM request timed out, retrying in %ds (attempt %d/%d)",
-                        wait, attempt + 1, _MAX_RETRIES,
-                    )
-                    time.sleep(wait)
-                    continue
-                raise
+                    raise
 
-        raise RuntimeError("LLM request failed after all retries")
+                except Exception as exc:
+                    last_error = exc
+                    if has_fallback:
+                        log.warning(
+                            "Model '%s' encountered error (%s). Falling back to '%s'...",
+                            current_model, exc, next_model
+                        )
+                        break
+                    raise
+
+        if last_error:
+            raise RuntimeError(f"All configured LLM models failed ({', '.join(candidates)}). Last error: {last_error}")
+        raise RuntimeError("LLM request failed after all models and retries")
 
     def ask(self, prompt: str, **kwargs) -> str:
         """Convenience: single user prompt -> assistant response."""
