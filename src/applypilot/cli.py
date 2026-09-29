@@ -333,6 +333,57 @@ def dashboard() -> None:
 
 
 @app.command()
+def export(
+    output: Optional[str] = typer.Option(
+        None, "--output", "-o",
+        help="Custom output file path (.xlsx or .csv). Defaults to ~/.applypilot/jobs_export.xlsx.",
+    ),
+    format: str = typer.Option(
+        "xlsx", "--format", "-f",
+        help="Export format: 'xlsx' (default) or 'csv'.",
+    ),
+    min_score: Optional[int] = typer.Option(
+        None, "--min-score", "-m",
+        help="Only export jobs with fit_score >= this threshold (e.g. 7).",
+    ),
+    status: Optional[str] = typer.Option(
+        None, "--status", "-s",
+        help="Filter by status ('applied', 'ready', 'tailored', 'scored', 'enriched').",
+    ),
+    site: Optional[str] = typer.Option(
+        None, "--site",
+        help="Filter by job source site (e.g. 'linkedin', 'glints', 'kalibrr').",
+    ),
+    open_file: bool = typer.Option(
+        True, "--open/--no-open",
+        help="Automatically open the exported file after creation (default: true).",
+    ),
+) -> None:
+    """Export jobs and application status to a styled Excel (.xlsx) or CSV spreadsheet."""
+    _bootstrap()
+
+    from applypilot.export import export_jobs
+
+    try:
+        out_path = export_jobs(
+            output_path=output,
+            fmt=format,
+            min_score=min_score,
+            status_filter=status,
+            site_filter=site,
+            auto_open=open_file,
+        )
+        console.print(f"\n[bold green]Success![/bold green] Exported to: [bold]{out_path}[/bold]")
+        if open_file:
+            console.print("[dim]Opening file in default application...[/dim]\n")
+        else:
+            console.print()
+    except Exception as e:
+        console.print(f"[red]Export failed:[/red] {e}")
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def doctor() -> None:
     """Check your setup and diagnose missing requirements."""
     import shutil
