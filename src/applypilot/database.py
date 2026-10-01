@@ -254,77 +254,81 @@ def get_stats(conn: sqlite3.Connection | None = None) -> dict:
 
     # Enrichment stage
     stats["pending_detail"] = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE detail_scraped_at IS NULL"
+        "SELECT COUNT(*) FROM jobs WHERE detail_scraped_at IS NULL AND (apply_status IS NULL OR apply_status != 'expired')"
     ).fetchone()[0]
 
     stats["with_description"] = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE full_description IS NOT NULL"
+        "SELECT COUNT(*) FROM jobs WHERE full_description IS NOT NULL AND (apply_status IS NULL OR apply_status != 'expired')"
     ).fetchone()[0]
 
     stats["detail_errors"] = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE detail_error IS NOT NULL"
+        "SELECT COUNT(*) FROM jobs WHERE detail_error IS NOT NULL AND (apply_status IS NULL OR apply_status != 'expired')"
     ).fetchone()[0]
 
     # Scoring stage
     stats["scored"] = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE fit_score IS NOT NULL"
+        "SELECT COUNT(*) FROM jobs WHERE fit_score IS NOT NULL AND (apply_status IS NULL OR apply_status != 'expired')"
     ).fetchone()[0]
 
     stats["unscored"] = conn.execute(
         "SELECT COUNT(*) FROM jobs "
-        "WHERE full_description IS NOT NULL AND fit_score IS NULL"
+        "WHERE full_description IS NOT NULL AND fit_score IS NULL AND (apply_status IS NULL OR apply_status != 'expired')"
     ).fetchone()[0]
 
     # Score distribution
     dist_rows = conn.execute(
         "SELECT fit_score, COUNT(*) as cnt FROM jobs "
-        "WHERE fit_score IS NOT NULL "
+        "WHERE fit_score IS NOT NULL AND (apply_status IS NULL OR apply_status != 'expired') "
         "GROUP BY fit_score ORDER BY fit_score DESC"
     ).fetchall()
     stats["score_distribution"] = [(row[0], row[1]) for row in dist_rows]
 
     # Tailoring stage
     stats["tailored"] = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE tailored_resume_path IS NOT NULL"
+        "SELECT COUNT(*) FROM jobs WHERE tailored_resume_path IS NOT NULL AND (apply_status IS NULL OR apply_status != 'expired')"
     ).fetchone()[0]
 
     stats["untailored_eligible"] = conn.execute(
         "SELECT COUNT(*) FROM jobs "
         "WHERE fit_score >= 7 AND full_description IS NOT NULL "
-        "AND tailored_resume_path IS NULL"
+        "AND tailored_resume_path IS NULL AND (apply_status IS NULL OR apply_status != 'expired')"
     ).fetchone()[0]
 
     stats["tailor_exhausted"] = conn.execute(
         "SELECT COUNT(*) FROM jobs "
         "WHERE COALESCE(tailor_attempts, 0) >= 5 "
-        "AND tailored_resume_path IS NULL"
+        "AND tailored_resume_path IS NULL AND (apply_status IS NULL OR apply_status != 'expired')"
     ).fetchone()[0]
 
     # Cover letter stage
     stats["with_cover_letter"] = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE cover_letter_path IS NOT NULL"
+        "SELECT COUNT(*) FROM jobs WHERE cover_letter_path IS NOT NULL AND (apply_status IS NULL OR apply_status != 'expired')"
     ).fetchone()[0]
 
     stats["cover_exhausted"] = conn.execute(
         "SELECT COUNT(*) FROM jobs "
         "WHERE COALESCE(cover_attempts, 0) >= 5 "
-        "AND (cover_letter_path IS NULL OR cover_letter_path = '')"
+        "AND (cover_letter_path IS NULL OR cover_letter_path = '') AND (apply_status IS NULL OR apply_status != 'expired')"
     ).fetchone()[0]
 
     # Application stage
     stats["applied"] = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE applied_at IS NOT NULL"
+        "SELECT COUNT(*) FROM jobs WHERE applied_at IS NOT NULL AND apply_status = 'applied'"
     ).fetchone()[0]
 
     stats["apply_errors"] = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE apply_error IS NOT NULL"
+        "SELECT COUNT(*) FROM jobs WHERE apply_error IS NOT NULL AND (apply_status IS NULL OR apply_status != 'expired')"
     ).fetchone()[0]
 
     stats["ready_to_apply"] = conn.execute(
         "SELECT COUNT(*) FROM jobs "
         "WHERE tailored_resume_path IS NOT NULL "
         "AND applied_at IS NULL "
-        "AND application_url IS NOT NULL"
+        "AND application_url IS NOT NULL AND (apply_status IS NULL OR apply_status != 'expired')"
+    ).fetchone()[0]
+
+    stats["expired"] = conn.execute(
+        "SELECT COUNT(*) FROM jobs WHERE apply_status = 'expired'"
     ).fetchone()[0]
 
     return stats
@@ -369,7 +373,37 @@ def store_discovered_jobs(conn: sqlite3.Connection, jobs) -> tuple[int, int]:
             )
             new += 1
         except sqlite3.IntegrityError:
-            existing += 1
+            row = conn.execute("SELECT apply_status FROM jobs WHERE url = ?", (job.url,)).fetchone()
+            if row and row[0] == "expired":
+                conn.execute(
+                    "UPDATE jobs SET title = ?, company = ?, salary = ?, description = ?, "
+                    "location = ?, site = ?, strategy = ?, discovered_at = ?, posted_at = ?, "
+                    "full_description = ?, application_url = ?, detail_scraped_at = ?, "
+                    "detail_error = ?, fit_score = NULL, score_reasoning = NULL, scored_at = NULL, "
+                    "tailored_resume_path = NULL, tailored_at = NULL, tailor_attempts = 0, "
+                    "cover_letter_path = NULL, cover_letter_at = NULL, cover_attempts = 0, "
+                    "applied_at = NULL, apply_status = NULL, apply_error = NULL, apply_attempts = 0 "
+                    "WHERE url = ?",
+                    (
+                        job.title,
+                        job.company,
+                        job.salary,
+                        job.description,
+                        job.location,
+                        job.site,
+                        job.strategy,
+                        now,
+                        job.posted_at,
+                        full_description,
+                        job.application_url,
+                        detail_scraped_at,
+                        job.detail_error,
+                        job.url,
+                    ),
+                )
+                new += 1
+            else:
+                existing += 1
 
     conn.commit()
     return new, existing
@@ -405,7 +439,23 @@ def store_jobs(conn: sqlite3.Connection, jobs: list[dict],
             )
             new += 1
         except sqlite3.IntegrityError:
-            existing += 1
+            row = conn.execute("SELECT apply_status FROM jobs WHERE url = ?", (url,)).fetchone()
+            if row and row[0] == "expired":
+                conn.execute(
+                    "UPDATE jobs SET title = ?, salary = ?, description = ?, location = ?, "
+                    "site = ?, strategy = ?, discovered_at = ?, posted_at = NULL, "
+                    "full_description = NULL, application_url = NULL, detail_scraped_at = NULL, "
+                    "detail_error = NULL, fit_score = NULL, score_reasoning = NULL, scored_at = NULL, "
+                    "tailored_resume_path = NULL, tailored_at = NULL, tailor_attempts = 0, "
+                    "cover_letter_path = NULL, cover_letter_at = NULL, cover_attempts = 0, "
+                    "applied_at = NULL, apply_status = NULL, apply_error = NULL, apply_attempts = 0 "
+                    "WHERE url = ?",
+                    (job.get("title"), job.get("salary"), job.get("description"),
+                     job.get("location"), site, strategy, now, url),
+                )
+                new += 1
+            else:
+                existing += 1
 
     conn.commit()
     return new, existing
@@ -419,9 +469,9 @@ def get_jobs_by_stage(conn: sqlite3.Connection | None = None,
 
     Args:
         conn: Database connection. Uses get_connection() if None.
-        stage: One of "discovered", "enriched", "scored", "tailored", "applied".
+        stage: One of "discovered", "enriched", "scored", "tailored", "applied", "expired".
         min_score: Minimum fit_score filter (only relevant for scored+ stages).
-        limit: Maximum number of rows to return.
+        limit: Maximum number of rows to return (0 or negative = unlimited).
 
     Returns:
         List of job dicts.
@@ -431,20 +481,22 @@ def get_jobs_by_stage(conn: sqlite3.Connection | None = None,
 
     conditions = {
         "discovered": "1=1",
-        "pending_detail": "detail_scraped_at IS NULL",
-        "enriched": "full_description IS NOT NULL",
-        "pending_score": "full_description IS NOT NULL AND fit_score IS NULL",
-        "scored": "fit_score IS NOT NULL",
+        "pending_detail": "detail_scraped_at IS NULL AND (apply_status IS NULL OR apply_status != 'expired')",
+        "enriched": "full_description IS NOT NULL AND (apply_status IS NULL OR apply_status != 'expired')",
+        "pending_score": "full_description IS NOT NULL AND fit_score IS NULL AND (apply_status IS NULL OR apply_status != 'expired')",
+        "scored": "fit_score IS NOT NULL AND (apply_status IS NULL OR apply_status != 'expired')",
         "pending_tailor": (
             "fit_score >= ? AND full_description IS NOT NULL "
-            "AND tailored_resume_path IS NULL AND COALESCE(tailor_attempts, 0) < 5"
+            "AND tailored_resume_path IS NULL AND COALESCE(tailor_attempts, 0) < 5 "
+            "AND (apply_status IS NULL OR apply_status != 'expired')"
         ),
-        "tailored": "tailored_resume_path IS NOT NULL",
+        "tailored": "tailored_resume_path IS NOT NULL AND (apply_status IS NULL OR apply_status != 'expired')",
         "pending_apply": (
             "tailored_resume_path IS NOT NULL AND applied_at IS NULL "
-            "AND application_url IS NOT NULL"
+            "AND application_url IS NOT NULL AND (apply_status IS NULL OR apply_status != 'expired')"
         ),
-        "applied": "applied_at IS NOT NULL",
+        "applied": "applied_at IS NOT NULL AND (apply_status IS NULL OR apply_status != 'expired')",
+        "expired": "apply_status = 'expired'",
     }
 
     where = conditions.get(stage, "1=1")
@@ -471,3 +523,15 @@ def get_jobs_by_stage(conn: sqlite3.Connection | None = None,
         columns = rows[0].keys()
         return [dict(zip(columns, row)) for row in rows]
     return []
+
+
+def mark_all_jobs_expired(conn: sqlite3.Connection | None = None) -> int:
+    """Mark all active/unexpired jobs in the database as expired."""
+    if conn is None:
+        conn = get_connection()
+    cursor = conn.execute(
+        "UPDATE jobs SET apply_status = 'expired' "
+        "WHERE apply_status IS NULL OR apply_status != 'expired'"
+    )
+    conn.commit()
+    return cursor.rowcount

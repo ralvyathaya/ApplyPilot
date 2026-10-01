@@ -718,7 +718,7 @@ def _run_detail_scraper(
     Returns aggregate stats dict.
     """
     skip_filter = " AND ".join(f"site != '{s}'" for s in SKIP_DETAIL_SITES)
-    where = f"WHERE detail_scraped_at IS NULL AND {skip_filter}"
+    where = f"WHERE detail_scraped_at IS NULL AND (apply_status IS NULL OR apply_status != 'expired') AND {skip_filter}"
     rows = conn.execute(
         f"SELECT url, title, site FROM jobs {where} ORDER BY site"
     ).fetchall()

@@ -97,6 +97,7 @@ def run(
             "lenient: banned words ignored, LLM judge skipped (fastest, fewest API calls)."
         ),
     ),
+    limit: int = typer.Option(0, "--limit", "-l", help="Max jobs to process in tailor/cover/pdf stages (default: 0 = unlimited)."),
 ) -> None:
     """Run pipeline stages: discover, enrich, score, tailor, cover, pdf."""
     _bootstrap()
@@ -136,6 +137,7 @@ def run(
         stream=stream,
         workers=workers,
         validation_mode=validation,
+        limit=limit,
     )
 
     if result.get("errors"):
@@ -284,6 +286,8 @@ def status() -> None:
     summary.add_row("Ready to apply", str(stats["ready_to_apply"]))
     summary.add_row("Applied", str(stats["applied"]))
     summary.add_row("Apply errors", str(stats["apply_errors"]))
+    if stats.get("expired", 0) > 0:
+        summary.add_row("Marked expired", str(stats["expired"]))
 
     console.print(summary)
 
@@ -381,6 +385,27 @@ def export(
     except Exception as e:
         console.print(f"[red]Export failed:[/red] {e}")
         raise typer.Exit(code=1)
+
+
+@app.command()
+def expire(
+    all_jobs: bool = typer.Option(False, "--all", "-a", help="Mark all jobs in the database as expired."),
+    url: Optional[str] = typer.Option(None, "--url", help="Mark a specific job URL as expired."),
+) -> None:
+    """Mark job(s) in the database as expired so they are skipped in future pipeline runs."""
+    _bootstrap()
+
+    from applypilot.database import mark_all_jobs_expired
+
+    if all_jobs:
+        count = mark_all_jobs_expired()
+        console.print(f"[bold green]Success:[/bold green] Marked {count} job(s) as expired.")
+    elif url:
+        from applypilot.apply.launcher import mark_job
+        mark_job(url, "expired", reason="user requested")
+        console.print(f"[bold green]Marked as expired:[/bold green] {url}")
+    else:
+        console.print("[yellow]Specify --all to mark all jobs as expired, or --url <URL> for a specific job.[/yellow]")
 
 
 @app.command()

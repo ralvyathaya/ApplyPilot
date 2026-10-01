@@ -187,13 +187,13 @@ def generate_cover_letter(
 
 # ── Batch Entry Point ────────────────────────────────────────────────────
 
-def run_cover_letters(min_score: int = 7, limit: int = 20,
+def run_cover_letters(min_score: int = 7, limit: int = 0,
                       validation_mode: str = "normal") -> dict:
     """Generate cover letters for high-scoring jobs that have tailored resumes.
 
     Args:
         min_score:       Minimum fit_score threshold.
-        limit:           Maximum jobs to process.
+        limit:           Maximum jobs to process (0 = unlimited).
         validation_mode: "strict", "normal", or "lenient".
 
     Returns:
@@ -204,15 +204,21 @@ def run_cover_letters(min_score: int = 7, limit: int = 20,
     conn = get_connection()
 
     # Fetch jobs that have tailored resumes but no cover letter yet
-    jobs = conn.execute(
-        "SELECT * FROM jobs "
-        "WHERE fit_score >= ? AND tailored_resume_path IS NOT NULL "
+    where = (
+        "fit_score >= ? AND tailored_resume_path IS NOT NULL "
         "AND full_description IS NOT NULL "
         "AND (cover_letter_path IS NULL OR cover_letter_path = '') "
         "AND COALESCE(cover_attempts, 0) < ? "
-        "ORDER BY fit_score DESC LIMIT ?",
-        (min_score, MAX_ATTEMPTS, limit),
-    ).fetchall()
+        "AND (apply_status IS NULL OR apply_status != 'expired')"
+    )
+    if limit > 0:
+        query = f"SELECT * FROM jobs WHERE {where} ORDER BY fit_score DESC LIMIT ?"
+        params = (min_score, MAX_ATTEMPTS, limit)
+    else:
+        query = f"SELECT * FROM jobs WHERE {where} ORDER BY fit_score DESC"
+        params = (min_score, MAX_ATTEMPTS)
+
+    jobs = conn.execute(query, params).fetchall()
 
     if not jobs:
         log.info("No jobs needing cover letters (score >= %d).", min_score)

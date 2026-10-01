@@ -93,8 +93,11 @@ def _calculate_freshness(posted_val: str | None, ref_time: datetime.datetime | N
 
 def _determine_status(row: dict[str, Any]) -> str:
     """Determine high-level application status from job record."""
+    apply_status = (row.get("apply_status") or "").lower()
+    if apply_status == "expired":
+        return "Expired"
+
     if row.get("applied_at"):
-        apply_status = (row.get("apply_status") or "").lower()
         if apply_status == "failed":
             return "Apply Failed"
         return "Applied"
@@ -150,15 +153,17 @@ def fetch_jobs_for_export(
     if status_filter:
         s = status_filter.strip().lower()
         if s == "applied":
-            query += " AND applied_at IS NOT NULL"
+            query += " AND applied_at IS NOT NULL AND apply_status = 'applied'"
         elif s in ("ready", "ready_to_apply"):
-            query += " AND tailored_resume_path IS NOT NULL AND applied_at IS NULL"
+            query += " AND tailored_resume_path IS NOT NULL AND applied_at IS NULL AND (apply_status IS NULL OR apply_status != 'expired')"
         elif s == "tailored":
-            query += " AND tailored_resume_path IS NOT NULL"
+            query += " AND tailored_resume_path IS NOT NULL AND (apply_status IS NULL OR apply_status != 'expired')"
         elif s == "scored":
-            query += " AND fit_score IS NOT NULL"
+            query += " AND fit_score IS NOT NULL AND (apply_status IS NULL OR apply_status != 'expired')"
         elif s == "enriched":
-            query += " AND full_description IS NOT NULL"
+            query += " AND full_description IS NOT NULL AND (apply_status IS NULL OR apply_status != 'expired')"
+        elif s == "expired":
+            query += " AND apply_status = 'expired'"
 
     # Priority sorting:
     # 1. Fit score (NULLS LAST)
@@ -289,6 +294,8 @@ def export_to_xlsx(
 
     fill_status_applied = PatternFill(start_color="D9EAD3", end_color="D9EAD3", fill_type="solid")
     fill_status_ready = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+    fill_status_expired = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+    font_status_expired = Font(name="Segoe UI", size=10, color="7F7F7F")
     fill_fresh_24h = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
     font_fresh_24h = Font(name="Segoe UI", size=10, bold=True, color="276A3C")
 
@@ -366,6 +373,9 @@ def export_to_xlsx(
                     cell.fill = fill_status_applied
                 elif status == "Ready to Apply":
                     cell.fill = fill_status_ready
+                elif status == "Expired":
+                    cell.fill = fill_status_expired
+                    cell.font = font_status_expired
 
             elif col_idx == 8 and url:  # Clickable URL
                 cell.hyperlink = url

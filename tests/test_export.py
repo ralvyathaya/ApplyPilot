@@ -64,6 +64,7 @@ def test_calculate_freshness():
 def test_determine_status():
     assert _determine_status({"applied_at": "2026-09-20", "apply_status": "applied"}) == "Applied"
     assert _determine_status({"applied_at": "2026-09-20", "apply_status": "failed"}) == "Apply Failed"
+    assert _determine_status({"apply_status": "expired"}) == "Expired"
     assert _determine_status({
         "tailored_resume_path": "/path/resume.txt",
         "cover_letter_path": "/path/cl.txt",
