@@ -259,3 +259,58 @@ def test_run_scoring_missing_batch_entry_does_not_abort(tmp_path, monkeypatch):
     assert scores["https://example.com/4"] is None
 
     close_connection(db_path)
+
+
+def test_default_batch_size_is_one():
+    assert scorer._BATCH_SIZE == 1
+
+
+def test_parse_score_response_numbered_lines():
+    text = (
+        "1. SCORE: 9\n"
+        "2. KEYWORDS: Figma, UI/UX, Design\n"
+        "3. REASONING: Strong match for fresh graduate."
+    )
+    parsed = scorer._parse_score_response(text)
+    assert parsed["score"] == 9
+    assert "Figma" in parsed["keywords"]
+    assert "Strong match" in parsed["reasoning"]
+
+
+def test_parse_score_response_fit_score_variant():
+    text = (
+        "Fit Score: 8/10\n"
+        "Keywords: React, TypeScript\n"
+        "Reasoning: Candidate has good skills."
+    )
+    parsed = scorer._parse_score_response(text)
+    assert parsed["score"] == 8
+    assert "React" in parsed["keywords"]
+    assert "Candidate has good skills." in parsed["reasoning"]
+
+
+def test_parse_score_response_json_format():
+    text = json.dumps({
+        "score": 7,
+        "keywords": "Python, SQL",
+        "reasoning": "Moderate fit for data role."
+    })
+    parsed = scorer._parse_score_response(text)
+    assert parsed["score"] == 7
+    assert "Python" in parsed["keywords"]
+    assert "Moderate fit" in parsed["reasoning"]
+
+
+def test_parse_score_response_multiline_reasoning():
+    text = (
+        "SCORE: 8\n"
+        "KEYWORDS: Figma\n"
+        "REASONING: The candidate has strong foundations in Figma.\n"
+        "Furthermore, internship experience is highly relevant.\n"
+        "Overall a solid hire."
+    )
+    parsed = scorer._parse_score_response(text)
+    assert parsed["score"] == 8
+    assert "internship experience is highly relevant" in parsed["reasoning"]
+    assert "Overall a solid hire." in parsed["reasoning"]
+

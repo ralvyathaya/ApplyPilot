@@ -50,8 +50,10 @@ REASONING: [2-3 sentences explaining the score]"""
 
 
 # Batch scoring: free-tier quotas are tiny (Gemini free = 15 RPM and a low
-# daily cap), so we score several jobs per LLM call to cut request volume ~10x.
-_BATCH_SIZE = max(1, int(os.environ.get("LLM_SCORE_BATCH_SIZE", "8")))
+# daily cap). Default to 1 (single-job scoring) for maximum reliability and
+# compatibility across LLM providers and reasoning models. Override via
+# LLM_SCORE_BATCH_SIZE env var.
+_BATCH_SIZE = max(1, int(os.environ.get("LLM_SCORE_BATCH_SIZE", "1")))
 _BATCH_DESC_CHARS = 1200
 
 # Circuit breaker: when this many jobs in a row fail completely (each already
@@ -100,8 +102,8 @@ def _parse_score_response(response: str) -> dict:
     """Parse the LLM's score response into structured data.
 
     Tolerates common formatting drift (markdown bold like ``**SCORE:** 8``,
-    stray bullets, extra whitespace) by matching labels anywhere at the start
-    of a line rather than requiring an exact ``LABEL:`` prefix.
+    bullets, numbered lines, stray whitespace, or embedded JSON) by matching
+    labels flexibly across lines.
 
     Args:
         response: Raw LLM response text.
@@ -110,24 +112,64 @@ def _parse_score_response(response: str) -> dict:
         {"score": int, "keywords": str, "reasoning": str}. score is 0 when no
         usable SCORE label is found; callers treat < 1 as unparseable.
     """
+    if not response or not isinstance(response, str):
+        return {"score": 0, "keywords": "", "reasoning": ""}
+
     score = 0
     keywords = ""
-    reasoning = response
+    reasoning = ""
 
-    match = re.search(r"^\W*SCORE\W*(\d{1,2})", response, re.IGNORECASE | re.MULTILINE)
+    # 1. Match SCORE: [1-10] (handles **SCORE:** 8, Score: 8/10, 1. SCORE: 8, Fit Score: 8, etc.)
+    match = re.search(
+        r"(?:^|\n)\W*(?:\d+[\.\)]\s*)?(?:FIT\s*|OVERALL\s*|FINAL\s*)?SCORE\W*(\d{1,2})",
+        response,
+        re.IGNORECASE,
+    )
+    if not match:
+        match = re.search(r"\bSCORE\W*(\d{1,2})\b", response, re.IGNORECASE)
+    if not match:
+        match = re.search(r"(?:fit\s*)?score\s*[:=]\s*(\d{1,2})", response, re.IGNORECASE)
     if match:
         try:
             score = max(1, min(10, int(match.group(1))))
         except ValueError:
             score = 0
+    else:
+        # Fallback: check if model returned JSON
+        json_match = re.search(r"\"score\"\s*:\s*(\d{1,2})", response, re.IGNORECASE)
+        if json_match:
+            try:
+                score = max(1, min(10, int(json_match.group(1))))
+            except ValueError:
+                score = 0
 
-    match = re.search(r"^\W*KEYWORDS\W*(.+)$", response, re.IGNORECASE | re.MULTILINE)
-    if match:
-        keywords = match.group(1).strip()
+    # 2. Match KEYWORDS
+    kw_match = re.search(
+        r"(?:^|\n)\W*(?:\d+[\.\)]\s*)?KEYWORDS\W*(.*?)(?=\n\W*(?:\d+[\.\)]\s*)?REASONING|\Z)",
+        response,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if kw_match:
+        keywords = " ".join(kw_match.group(1).split()).strip("[] \t\r\n*\"'")
+    elif '"keywords"' in response:
+        kw_json = re.search(r"\"keywords\"\s*:\s*\"([^\"]*)\"", response)
+        if kw_json:
+            keywords = kw_json.group(1).strip()
 
-    match = re.search(r"^\W*REASONING\W*(.+)$", response, re.IGNORECASE | re.MULTILINE)
-    if match:
-        reasoning = match.group(1).strip()
+    # 3. Match REASONING
+    re_match = re.search(
+        r"(?:^|\n)\W*(?:\d+[\.\)]\s*)?REASONING\W*(.*)",
+        response,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if re_match:
+        reasoning = re_match.group(1).strip().strip("*\"'")
+    elif '"reasoning"' in response:
+        re_json = re.search(r"\"reasoning\"\s*:\s*\"([^\"]*)\"", response)
+        if re_json:
+            reasoning = re_json.group(1).strip()
+    else:
+        reasoning = response.strip()
 
     return {"score": score, "keywords": keywords, "reasoning": reasoning}
 
@@ -153,12 +195,21 @@ def score_job(resume_text: str, job: dict) -> dict | None:
 
     messages = [
         {"role": "system", "content": SCORE_PROMPT},
-        {"role": "user", "content": f"RESUME:\n{resume_text}\n\n---\n\nJOB POSTING:\n{job_text}"},
+        {
+            "role": "user",
+            "content": (
+                f"RESUME:\n{resume_text}\n\n---\n\nJOB POSTING:\n{job_text}\n\n---\n"
+                "Evaluate fit based on the criteria and constraints. Respond in EXACTLY this format:\n"
+                "SCORE: [1-10]\n"
+                "KEYWORDS: [comma-separated ATS keywords]\n"
+                "REASONING: [2-3 sentences]"
+            ),
+        },
     ]
 
     try:
         client = get_client()
-        response = client.chat(messages, max_tokens=512, temperature=0.2)
+        response = client.chat(messages, max_tokens=2048, temperature=0.2)
     except Exception as e:
         # Return None (not score=0): a failed call must leave the job unscored
         # so the next run retries it instead of persisting a bogus zero.
@@ -166,7 +217,7 @@ def score_job(resume_text: str, job: dict) -> dict | None:
         return None
     parsed = _parse_score_response(response)
     if parsed["score"] < 1:
-        log.warning("Unparseable score response for job '%s'", job.get("title", "?"))
+        log.warning("Unparseable score response for job '%s': %.120r", job.get("title", "?"), response)
         return None
     return parsed
 
@@ -324,7 +375,10 @@ def run_scoring(
         jobs = [dict(zip(columns, row)) for row in jobs]
 
     batch_size = max(1, batch_size)
-    log.info("Scoring %d jobs in batches of %d...", len(jobs), batch_size)
+    if batch_size == 1:
+        log.info("Scoring %d jobs (1 job at a time)...", len(jobs))
+    else:
+        log.info("Scoring %d jobs in batches of %d...", len(jobs), batch_size)
     t0 = time.time()
     completed = 0
     errors = 0
