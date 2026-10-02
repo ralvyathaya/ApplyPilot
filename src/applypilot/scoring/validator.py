@@ -113,10 +113,33 @@ def validate_json_fields(data: dict, profile: dict, mode: str = "normal") -> dic
     errors: list[str] = []
     warnings: list[str] = []
 
+    # Normalize title aliases
+    if not data.get("title"):
+        for alias in ("job_title", "role_title", "role", "target_role", "target_title", "headline"):
+            if data.get(alias):
+                data["title"] = str(data[alias]).strip()
+                break
+        if not data.get("title"):
+            exp = profile.get("experience", {})
+            if exp.get("target_role"):
+                data["title"] = exp["target_role"]
+
+    # Normalize skills if returned as list
+    if isinstance(data.get("skills"), list):
+        data["skills"] = {"Technical Skills": ", ".join(str(s) for s in data["skills"])}
+
+    # Projects: ensure list type and allow empty list (e.g. when irrelevant projects are dropped)
+    if "projects" not in data or data["projects"] is None:
+        data["projects"] = []
+
     # Required keys — always checked regardless of mode
     for key in ("title", "summary", "skills", "experience", "projects", "education"):
-        if key not in data or not data[key]:
-            errors.append(f"Missing required field: {key}")
+        if key == "projects":
+            if key not in data or not isinstance(data[key], list):
+                errors.append(f"Missing required field: {key}")
+        else:
+            if key not in data or not data[key]:
+                errors.append(f"Missing required field: {key}")
     if errors:
         return {"passed": False, "errors": errors, "warnings": warnings}
 

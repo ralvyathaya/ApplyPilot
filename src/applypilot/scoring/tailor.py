@@ -116,7 +116,8 @@ BULLETS: Strong verb + what you built + quantified impact. Vary verbs (Built, De
 - Preserved school: {school}
 - Prefer 1 page, but never drop a preserved company to save space; 2 pages is acceptable.
 
-## OUTPUT: Return ONLY valid JSON. No markdown fences. No commentary. No "here is" preamble.
+## OUTPUT: Return ONLY valid JSON. No markdown fences. No commentary. No preamble.
+Start directly with {{ and end with }}.
 
 {{"title":"Role Title","summary":"2-3 tailored sentences.","skills":{{"Languages":"...","Frameworks":"...","DevOps & Infra":"...","Databases":"...","Tools":"..."}},"experience":[{{"header":"Title at Company","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2","bullet 3","bullet 4"]}}],"projects":[{{"header":"Project Name - Description","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2"]}}],"education":"{school} | {education_level}"}}"""
 
@@ -180,7 +181,7 @@ Be strict about major lies. Be lenient about minor stretches and learnable skill
 # ── JSON Extraction ───────────────────────────────────────────────────────
 
 def extract_json(raw: str) -> dict:
-    """Robustly extract JSON from LLM response (handles fences, preamble).
+    """Robustly extract JSON from LLM response (handles fences, preamble, truncation).
 
     Args:
         raw: Raw LLM response text.
@@ -195,7 +196,9 @@ def extract_json(raw: str) -> dict:
 
     # Direct parse
     try:
-        return json.loads(raw)
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            return data
     except json.JSONDecodeError:
         pass
 
@@ -206,18 +209,58 @@ def extract_json(raw: str) -> dict:
             if part.startswith("json"):
                 part = part[4:].strip()
             try:
-                return json.loads(part)
+                data = json.loads(part)
+                if isinstance(data, dict):
+                    return data
             except json.JSONDecodeError:
                 continue
 
-    # Find outermost { ... }
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start != -1 and end > start:
+    # Find candidate JSON objects starting with {
+    candidate_starts = [m.start() for m in re.finditer(r"\{", raw)]
+    last_end = raw.rfind("}")
+
+    for s in candidate_starts:
+        if last_end > s:
+            chunk = raw[s : last_end + 1]
+            try:
+                data = json.loads(chunk)
+                if isinstance(data, dict):
+                    return data
+            except json.JSONDecodeError:
+                pass
+            # Try removing trailing commas
+            cleaned = re.sub(r",\s*([}\]])", r"\1", chunk)
+            try:
+                data = json.loads(cleaned)
+                if isinstance(data, dict):
+                    return data
+            except json.JSONDecodeError:
+                pass
+
+    # Salvage: try auto-closing truncated JSON from first {
+    if candidate_starts:
+        s = candidate_starts[0]
+        body = raw[s:].strip()
+        # Close open string if odd number of unescaped quotes
+        quotes = len(re.findall(r'(?<!\\)"', body))
+        if quotes % 2 != 0:
+            body += '"'
+        open_brackets = body.count("[") - body.count("]")
+        open_braces = body.count("{") - body.count("}")
+        body += "]" * max(0, open_brackets)
+        body += "}" * max(0, open_braces)
         try:
-            return json.loads(raw[start:end + 1])
+            data = json.loads(body)
+            if isinstance(data, dict):
+                return data
         except json.JSONDecodeError:
-            pass
+            cleaned = re.sub(r",\s*([}\]])", r"\1", body)
+            try:
+                data = json.loads(cleaned)
+                if isinstance(data, dict):
+                    return data
+            except json.JSONDecodeError:
+                pass
 
     raise ValueError("No valid JSON found in LLM response")
 
@@ -242,11 +285,7 @@ def assemble_resume_text(data: dict, profile: dict) -> str:
 
     # Header -- always code-injected from profile
     lines.append(personal.get("full_name", ""))
-    lines.append(sanitize_text(data.get("title", "Software Engineer")))
-
-    # Location from search config or profile -- leave blank if not available
-    # The location line is optional; the original used a hardcoded city.
-    # We omit it here; the LLM prompt can include it if the user sets it.
+    lines.append(sanitize_text(data.get("title", profile.get("experience", {}).get("target_role", "Candidate"))))
 
     # Contact line
     contact_parts: list[str] = []
@@ -264,14 +303,16 @@ def assemble_resume_text(data: dict, profile: dict) -> str:
 
     # Summary
     lines.append("SUMMARY")
-    lines.append(sanitize_text(data["summary"]))
+    lines.append(sanitize_text(str(data.get("summary", ""))))
     lines.append("")
 
     # Technical Skills
     lines.append("TECHNICAL SKILLS")
-    if isinstance(data["skills"], dict):
+    if isinstance(data.get("skills"), dict):
         for cat, val in data["skills"].items():
             lines.append(f"{cat}: {sanitize_text(str(val))}")
+    elif isinstance(data.get("skills"), list):
+        lines.append(f"Skills: {sanitize_text(', '.join(str(s) for s in data['skills']))}")
     lines.append("")
 
     # Experience
@@ -284,19 +325,31 @@ def assemble_resume_text(data: dict, profile: dict) -> str:
             lines.append(f"- {sanitize_text(b)}")
         lines.append("")
 
-    # Projects
-    lines.append("PROJECTS")
-    for entry in data.get("projects", []):
-        lines.append(sanitize_text(entry.get("header", "")))
-        if entry.get("subtitle"):
-            lines.append(sanitize_text(entry["subtitle"]))
-        for b in entry.get("bullets", []):
-            lines.append(f"- {sanitize_text(b)}")
-        lines.append("")
+    # Projects (only include if non-empty)
+    projects = data.get("projects")
+    if projects and isinstance(projects, list):
+        lines.append("PROJECTS")
+        for entry in projects:
+            lines.append(sanitize_text(entry.get("header", "")))
+            if entry.get("subtitle"):
+                lines.append(sanitize_text(entry["subtitle"]))
+            for b in entry.get("bullets", []):
+                lines.append(f"- {sanitize_text(b)}")
+            lines.append("")
 
-    # Education
+    # Education (format cleanly if dict or string)
     lines.append("EDUCATION")
-    lines.append(sanitize_text(str(data.get("education", ""))))
+    edu = data.get("education", "")
+    if isinstance(edu, dict):
+        parts = [
+            edu.get("university") or edu.get("school") or edu.get("institution") or "",
+            edu.get("degree") or edu.get("major") or "",
+            edu.get("period") or edu.get("year") or edu.get("dates") or "",
+            f"GPA: {edu['gpa']}" if edu.get("gpa") else "",
+        ]
+        lines.append(sanitize_text(" | ".join(p for p in parts if p)))
+    else:
+        lines.append(sanitize_text(str(edu)))
 
     return "\n".join(lines)
 
@@ -401,10 +454,19 @@ def tailor_resume(
 
         messages = [
             {"role": "system", "content": prompt},
-            {"role": "user", "content": f"ORIGINAL RESUME:\n{resume_text}\n\n---\n\nTARGET JOB:\n{job_text}\n\nReturn the JSON:"},
+            {
+                "role": "user",
+                "content": (
+                    f"ORIGINAL RESUME:\n{resume_text}\n\n---\n\n"
+                    f"TARGET JOB:\n{job_text}\n\n---\n\n"
+                    "Return ONLY a valid JSON object matching the requested schema. "
+                    "Start your response directly with '{' and end with '}'. "
+                    "Do not include any thought process, commentary, or markdown formatting outside the JSON."
+                ),
+            },
         ]
 
-        raw = client.chat(messages, max_tokens=2048, temperature=0.4)
+        raw = client.chat(messages, max_tokens=4096, temperature=0.4)
 
         # Parse JSON from response
         try:
