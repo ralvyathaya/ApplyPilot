@@ -210,57 +210,68 @@ def extract_json(raw: str) -> dict:
                 part = part[4:].strip()
             try:
                 data = json.loads(part)
-                if isinstance(data, dict):
+                if isinstance(data, dict) and any(k in data for k in ("summary", "skills", "experience")):
                     return data
             except json.JSONDecodeError:
-                continue
+                pass
+            cleaned = re.sub(r",\s*([}\]])", r"\1", part)
+            try:
+                data = json.loads(cleaned)
+                if isinstance(data, dict) and any(k in data for k in ("summary", "skills", "experience")):
+                    return data
+            except json.JSONDecodeError:
+                pass
 
-    # Find candidate JSON objects starting with {
+    # Find candidate JSON objects starting with { and ending with }
+    # Only match blocks that contain resume keys
+    resume_keys = ('"summary"', '"skills"', '"experience"')
     candidate_starts = [m.start() for m in re.finditer(r"\{", raw)]
-    last_end = raw.rfind("}")
+    candidate_ends = [m.end() for m in re.finditer(r"\}", raw)]
 
     for s in candidate_starts:
-        if last_end > s:
-            chunk = raw[s : last_end + 1]
-            try:
-                data = json.loads(chunk)
-                if isinstance(data, dict):
-                    return data
-            except json.JSONDecodeError:
-                pass
-            # Try removing trailing commas
-            cleaned = re.sub(r",\s*([}\]])", r"\1", chunk)
-            try:
-                data = json.loads(cleaned)
-                if isinstance(data, dict):
-                    return data
-            except json.JSONDecodeError:
-                pass
+        snippet = raw[s:]
+        if not any(k in snippet for k in resume_keys):
+            continue
+        for e in reversed(candidate_ends):
+            if e > s:
+                chunk = raw[s:e]
+                try:
+                    data = json.loads(chunk)
+                    if isinstance(data, dict) and any(k in data for k in ("summary", "skills", "experience")):
+                        return data
+                except json.JSONDecodeError:
+                    pass
+                cleaned = re.sub(r",\s*([}\]])", r"\1", chunk)
+                try:
+                    data = json.loads(cleaned)
+                    if isinstance(data, dict) and any(k in data for k in ("summary", "skills", "experience")):
+                        return data
+                except json.JSONDecodeError:
+                    pass
 
-    # Salvage: try auto-closing truncated JSON from first {
-    if candidate_starts:
-        s = candidate_starts[0]
+    # Salvage: try auto-closing truncated JSON that contains resume keys
+    for s in candidate_starts:
         body = raw[s:].strip()
-        # Close open string if odd number of unescaped quotes
-        quotes = len(re.findall(r'(?<!\\)"', body))
-        if quotes % 2 != 0:
-            body += '"'
-        open_brackets = body.count("[") - body.count("]")
-        open_braces = body.count("{") - body.count("}")
-        body += "]" * max(0, open_brackets)
-        body += "}" * max(0, open_braces)
-        try:
-            data = json.loads(body)
-            if isinstance(data, dict):
-                return data
-        except json.JSONDecodeError:
-            cleaned = re.sub(r",\s*([}\]])", r"\1", body)
+        if any(k in body for k in resume_keys):
+            quotes = len(re.findall(r'(?<!\\)"', body))
+            if quotes % 2 != 0:
+                body += '"'
+            open_brackets = body.count("[") - body.count("]")
+            open_braces = body.count("{") - body.count("}")
+            body += "]" * max(0, open_brackets)
+            body += "}" * max(0, open_braces)
             try:
-                data = json.loads(cleaned)
+                data = json.loads(body)
                 if isinstance(data, dict):
                     return data
             except json.JSONDecodeError:
-                pass
+                cleaned = re.sub(r",\s*([}\]])", r"\1", body)
+                try:
+                    data = json.loads(cleaned)
+                    if isinstance(data, dict):
+                        return data
+                except json.JSONDecodeError:
+                    pass
 
     raise ValueError("No valid JSON found in LLM response")
 
@@ -457,6 +468,7 @@ def tailor_resume(
             {
                 "role": "user",
                 "content": (
+                    f"{prompt}\n\n---\n\n"
                     f"ORIGINAL RESUME:\n{resume_text}\n\n---\n\n"
                     f"TARGET JOB:\n{job_text}\n\n---\n\n"
                     "Return ONLY a valid JSON object matching the requested schema. "

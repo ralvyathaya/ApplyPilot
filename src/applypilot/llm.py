@@ -36,7 +36,7 @@ def _detect_provider() -> tuple[str, str, str]:
     if gemini_key and not local_url:
         return (
             "https://generativelanguage.googleapis.com/v1beta/openai",
-            model_override or "gemini-3.6-flash",
+            model_override or "gemini-3.8-flash",
             gemini_key,
         )
 
