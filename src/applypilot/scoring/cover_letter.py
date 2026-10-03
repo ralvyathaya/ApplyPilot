@@ -161,13 +161,14 @@ def generate_cover_letter(
         messages = [
             {"role": "system", "content": prompt},
             {"role": "user", "content": (
+                f"{prompt}\n\n---\n\n"
                 f"RESUME:\n{resume_text}\n\n---\n\n"
                 f"TARGET JOB:\n{job_text}\n\n"
                 "Write the cover letter:"
             )},
         ]
 
-        letter = client.chat(messages, max_tokens=1024, temperature=0.7)
+        letter = client.chat(messages, max_tokens=4096, temperature=0.7)
         letter = sanitize_text(letter)  # auto-fix em dashes, smart quotes
         letter = _strip_preamble(letter)  # remove any "Here is the letter:" prefix
 
