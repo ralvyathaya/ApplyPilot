@@ -386,6 +386,7 @@ def judge_tailored_resume(
     messages = [
         {"role": "system", "content": judge_prompt},
         {"role": "user", "content": (
+            f"{judge_prompt}\n\n---\n\n"
             f"JOB TITLE: {job_title}\n\n"
             f"ORIGINAL RESUME:\n{original_text}\n\n---\n\n"
             f"TAILORED RESUME:\n{tailored_text}\n\n"
@@ -396,10 +397,11 @@ def judge_tailored_resume(
     client = get_client()
     response = client.chat(messages, max_tokens=512, temperature=0.1)
 
-    passed = "VERDICT: PASS" in response.upper()
+    upper_resp = response.upper()
+    passed = "VERDICT: PASS" in upper_resp or ("PASS" in upper_resp and "FAIL" not in upper_resp)
     issues = "none"
-    if "ISSUES:" in response.upper():
-        issues_idx = response.upper().index("ISSUES:")
+    if "ISSUES:" in upper_resp:
+        issues_idx = upper_resp.index("ISSUES:")
         issues = response[issues_idx + 7:].strip()
 
     return {
