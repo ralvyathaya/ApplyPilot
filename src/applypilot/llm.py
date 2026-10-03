@@ -195,7 +195,9 @@ class LLMClient:
             "max_tokens": max_tokens,
         }
         if self._is_gemini:
-            payload["reasoning_effort"] = os.environ.get("LLM_REASONING_EFFORT", "minimal")
+            effort = os.environ.get("LLM_REASONING_EFFORT", "").strip()
+            if effort:
+                payload["reasoning_effort"] = effort
 
         resp = self._client.post(
             f"{self.base_url}/chat/completions",
