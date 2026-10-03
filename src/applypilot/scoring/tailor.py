@@ -304,10 +304,14 @@ def assemble_resume_text(data: dict, profile: dict) -> str:
         contact_parts.append(personal["email"])
     if personal.get("phone"):
         contact_parts.append(personal["phone"])
-    if personal.get("github_url"):
-        contact_parts.append(personal["github_url"])
+    if personal.get("portfolio_url"):
+        contact_parts.append(personal["portfolio_url"])
+    elif personal.get("website_url"):
+        contact_parts.append(personal["website_url"])
     if personal.get("linkedin_url"):
         contact_parts.append(personal["linkedin_url"])
+    if personal.get("github_url"):
+        contact_parts.append(personal["github_url"])
     if contact_parts:
         lines.append(" | ".join(contact_parts))
     lines.append("")
